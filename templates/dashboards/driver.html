@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Driver Alerts - SEVPS{% endblock %}
+{% block nav_driver %}active{% endblock %}
+
+{% block content %}
+<div class="split">
+  <aside class="sidebar">
+    <div class="card">
+      <h3>Your position</h3>
+      <p class="muted" style="font-size:12.5px;margin:0 0 8px">
+        Click anywhere on the map to place yourself on the road, or use your real GPS.
+        The app subscribes to the geohash cells around you and receives warnings for
+        emergency vehicles approaching <em>your</em> stretch of road only.
+      </p>
+      <div class="btn-row">
+        <button id="btn-gps" class="ghost">Use my GPS</button>
+      </div>
+      <div class="muted mono" id="pos" style="font-size:12px;margin-top:8px">not set</div>
+      <div class="muted" id="cells" style="font-size:11px;margin-top:4px"></div>
+    </div>
+
+    <div id="alerts"><div class="card"><div class="empty">No emergency vehicles approaching your location.</div></div></div>
+
+    <div class="card"><h3>Alert log</h3><div class="log" id="log"></div></div>
+  </aside>
+  <div id="map"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const map = SEVPS.createMap("map", [{{ map_center.0 }}, {{ map_center.1 }}], {{ map_zoom }});
+  const log = SEVPS.logger("log");
+  const DEVICE_ID = "web-" + Math.random().toString(36).slice(2, 10);
+
+  let me = null;
+  let socket = null;
+  const active = {};   // uuid -> alert
+  const circles = {};
+
+  function setPosition(lat, lon) {
+    if (me) me.setLatLng([lat, lon]);
+    else me = L.marker([lat, lon], { icon: SEVPS.dotIcon("#4da3ff", 16) }).bindPopup("You").addTo(map);
+    document.getElementById("pos").textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    map.setView([lat, lon], Math.max(map.getZoom(), 14));
+    if (socket) socket.send({ type: "position", device_id: DEVICE_ID, latitude: lat, longitude: lon });
+  }
+
+  map.on("click", (e) => setPosition(e.latlng.lat, e.latlng.lng));
+
+  document.getElementById("btn-gps").onclick = () => {
+    if (!navigator.geolocation) { log("geolocation unavailable in this browser", "bad"); return; }
+    navigator.geolocation.watchPosition(
+      (p) => setPosition(p.coords.latitude, p.coords.longitude),
+      () => log("could not read GPS position", "bad"),
+      { enableHighAccuracy: true }
+    );
+  };
+
+  function renderAlerts() {
+    const rows = Object.values(active).sort((a, b) => a.eta_seconds - b.eta_seconds);
+    const box = document.getElementById("alerts");
+    if (!rows.length) {
+      box.innerHTML = '<div class="card"><div class="empty">No emergency vehicles approaching your location.</div></div>';
+      return;
+    }
+    box.innerHTML = rows.map((a) => `
+      <div class="alert-banner">
+        <div class="eta">${Math.round(a.eta_seconds)}s</div>
+        <div class="msg">${a.instruction}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:6px">${a.message}</div>
+        <div class="muted" style="font-size:11.5px;margin-top:4px">
+          approaching from bearing ${Math.round(a.approach_bearing_deg)}&deg;
+          &middot; priority level ${a.priority_level}
+        </div>
+      </div>`).join("");
+  }
+
+  function receive(alert) {
+    active[alert.uuid] = alert;
+    if (circles[alert.uuid]) map.removeLayer(circles[alert.uuid]);
+    circles[alert.uuid] = L.circle([alert.latitude, alert.longitude], {
+      radius: alert.radius_m, color: "#ff4d4f", weight: 2, fillOpacity: 0.10,
+    }).addTo(map);
+    renderAlerts();
+    log(alert.message, "bad");
+
+    const ttl = Math.max(6, alert.eta_seconds) * 1000;
+    setTimeout(() => {
+      delete active[alert.uuid];
+      if (circles[alert.uuid]) { map.removeLayer(circles[alert.uuid]); delete circles[alert.uuid]; }
+      renderAlerts();
+    }, ttl);
+  }
+
+  socket = new SEVPS.Socket("/ws/drivers/", {
+    open: () => { if (me) { const p = me.getLatLng(); socket.send({ type: "position", device_id: DEVICE_ID, latitude: p.lat, longitude: p.lng }); } },
+    snapshot: (data) => { document.getElementById("cells").textContent = "cells: " + (data.subscribed_cells || []).join(" "); },
+    subscribed: (data) => { document.getElementById("cells").textContent = "cells: " + (data.cells || []).join(" "); },
+    driver_alert: receive,
+  });
+
+  // Countdown ticks locally so the number stays honest between pushes.
+  setInterval(() => {
+    Object.values(active).forEach((a) => { a.eta_seconds = Math.max(0, a.eta_seconds - 1); });
+    if (Object.keys(active).length) renderAlerts();
+  }, 1000);
+
+  // Fallback poll - a road user must never miss a warning because the alert
+  // was raised in a different process from the one holding this socket.
+  setInterval(async () => {
+    if (!me) return;
+    const p = me.getLatLng();
+    const data = await SEVPS.api(`/api/v1/alerts/nearby/?lat=${p.lat}&lon=${p.lng}`);
+    (data.alerts || []).forEach((a) => { if (!active[a.uuid]) receive(a); });
+  }, 3000);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# SEVPS - Smart Emergency Vehicle Priority System
+# Core runtime requirements (required)
+# ---------------------------------------------------------------------------
+Django==5.0.9
+djangorestframework==3.15.2
+djangorestframework-simplejwt[crypto]==5.3.1
+channels==4.1.0
+daphne==4.1.2
+django-cors-headers==4.4.0
+networkx==3.3
+python-dotenv==1.0.1
+requests==2.32.3
+
+# ---------------------------------------------------------------------------
+# PostgreSQL / PostGIS spatial backend (Phase 3)
+#   Required only when SEVPS_DB_ENGINE=postgres. SEVPS reaches PostGIS through
+#   generated geography columns and raw spatial SQL, so GDAL is NOT needed;
+#   install it only if you set SEVPS_USE_GEODJANGO=1.
+# ---------------------------------------------------------------------------
+psycopg[binary]==3.2.1
+
+# ---------------------------------------------------------------------------
+# Optional - Redis channel layer for multi-process WebSocket fan-out
+#   Enable with SEVPS_REDIS_URL=redis://127.0.0.1:6379/0
+# ---------------------------------------------------------------------------
+# channels-redis==4.2.0
+
+# ---------------------------------------------------------------------------
+# Optional - Machine Learning congestion / ETA models
+#   Without these SEVPS falls back to the built-in statistical predictor.
+# ---------------------------------------------------------------------------
+# scikit-learn==1.5.1
+# numpy==2.0.1
+# joblib==1.4.2
+
+# ---------------------------------------------------------------------------
+# Optional - Computer Vision traffic analysis (Layer 2 / feature 4.5)
+#   Without these the CV adapter runs in 'simulated' mode.
+# ---------------------------------------------------------------------------
+# opencv-python-headless==4.10.0.84
+# ultralytics==8.2.79        # YOLOv8
+
+# ---------------------------------------------------------------------------
+# Optional - background task queue for production deployments
+# ---------------------------------------------------------------------------
+# celery==5.4.0
+# redis==5.0.8

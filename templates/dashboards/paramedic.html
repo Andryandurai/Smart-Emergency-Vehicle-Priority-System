@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% block title %}Paramedic App - SEVPS{% endblock %}
+{% block nav_para %}active{% endblock %}
+
+{% block content %}
+{% if not vehicle %}
+<div class="page scroll">
+  <div class="page-head">
+    <h1>Paramedic application</h1>
+    <p>Select the crew's vehicle to open the on-board view.</p>
+  </div>
+  <div class="grid-3">
+    {% for v in vehicles %}
+    <a class="card" href="/legacy/paramedic/{{ v.callsign }}/" style="display:block">
+      <h3>{{ v.get_vehicle_type_display }}</h3>
+      <div style="font-size:19px;font-weight:700">{{ v.callsign }}</div>
+      <div class="muted" style="font-size:12px">{{ v.get_status_display }} &middot; {{ v.operator|default:"unassigned" }}</div>
+      <div class="muted" style="font-size:12px">Level {{ v.priority_level }} &middot; siren {{ v.siren_mode }}</div>
+    </a>
+    {% empty %}
+    <div class="card"><div class="empty">No vehicles registered. Run <code>python manage.py seed_demo</code>.</div></div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="split wide">
+  <aside class="sidebar">
+    <div class="card">
+      <h3>Vehicle</h3>
+      <div style="font-size:20px;font-weight:700">{{ vehicle.callsign }}</div>
+      <div class="muted" style="font-size:12px">{{ vehicle.get_vehicle_type_display }} &middot; <span id="veh-status">{{ vehicle.get_status_display }}</span></div>
+      <div id="priority-box" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="trip-card">
+      <h3>Current response</h3>
+      <div id="trip-info"><div class="empty">No active trip.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>1. Patient assessment &mdash; select emergency category</h3>
+      <div class="cat-grid" id="cat-grid">
+        {% for c in categories %}
+        <button class="cat" data-code="{{ c.code }}" data-level="{{ c.level }}" type="button">
+          {{ c.label }}<small>{{ c.required }}</small>
+        </button>
+        {% endfor %}
+      </div>
+      <label for="p-age">Patient age (optional)</label>
+      <input id="p-age" type="number" min="0" max="130" placeholder="e.g. 58">
+      <label for="p-notes">Clinical notes</label>
+      <textarea id="p-notes" placeholder="Observations, vitals, time of onset..."></textarea>
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:13px;color:var(--text)">
+        <input id="p-deteriorating" type="checkbox" style="width:auto"> Patient condition deteriorating
+      </label>
+      <div class="btn-row">
+        <button id="btn-recommend" disabled>2. Find suitable hospital</button>
+      </div>
+    </div>
+
+    <div class="card" id="rec-card" style="display:none">
+      <h3>3. Rule-based recommendation</h3>
+      <div id="rule-box"></div>
+      <div id="rec-list"></div>
+      <label for="override-reason" id="override-label" style="display:none">Override reason (required)</label>
+      <input id="override-reason" placeholder="Why a different hospital?" style="display:none">
+      <div class="btn-row">
+        <button id="btn-confirm">4. Confirm &amp; start green corridor</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Green corridor ahead</h3>
+      <div id="corridor"><div class="empty">No signals under priority control.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Crew log</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </aside>
+
+  <div id="map"></div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if vehicle %}
+<script>
+(function () {
+  const CALLSIGN = "{{ vehicle.callsign|escapejs }}";
+  const VEHICLE_ID = {{ vehicle.id }};
+  const map = SEVPS.createMap("map", [{{ vehicle.latitude|default:map_center.0 }}, {{ vehicle.longitude|default:map_center.1 }}], 15);
+  const log = SEVPS.logger("log");
+
+  const layers = { route: L.layerGroup().addTo(map), signals: L.layerGroup().addTo(map), hospitals: L.layerGroup().addTo(map) };
+  let vehicleMarker = null;
+  let selectedCategory = null;
+  let selectedHospitalId = null;
+  let recommendedId = null;
+  let currentTrip = null;
+
+  // ------------------------------------------------------- category picker
+  document.querySelectorAll("#cat-grid .cat").forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll("#cat-grid .cat").forEach((b) => b.classList.remove("selected"));
+      btn.classList.add("selected");
+      selectedCategory = btn.dataset.code;
+      document.getElementById("btn-recommend").disabled = false;
+    };
+  });
+
+  // -------------------------------------------------------- recommendation
+  document.getElementById("btn-recommend").onclick = async () => {
+    if (!selectedCategory) return;
+    const button = document.getElementById("btn-recommend");
+    button.disabled = true;
+    button.textContent = "Evaluating hospitals...";
+    try {
+      const position = vehicleMarker ? vehicleMarker.getLatLng() : map.getCenter();
+      const result = await SEVPS.api("/api/v1/hospitals/recommend/", {
+        method: "POST",
+        body: {
+          latitude: position.lat,
+          longitude: position.lng,
+          emergency_category: selectedCategory,
+        },
+      });
+      renderRecommendation(result);
+      log(`recommendation computed for ${selectedCategory}`, "ok");
+    } catch (err) {
+      log("recommendation failed: " + err.message, "bad");
+    } finally {
+      button.disabled = false;
+      button.textContent = "2. Find suitable hospital";
+    }
+  };
+
+  function renderRecommendation(result) {
+    document.getElementById("rec-card").style.display = "";
+    const rule = result.rule;
+    recommendedId = result.recommended ? result.recommended.hospital_id : null;
+    selectedHospitalId = recommendedId;
+
+    document.getElementById("rule-box").innerHTML = `
+      <div class="card" style="background:var(--panel);margin-bottom:10px">
+        <div style="font-weight:700">${rule.display_name}</div>
+        <div class="muted" style="font-size:12px;margin-top:4px">
+          Required: <b>${rule.required_facilities.join(", ") || "emergency department"}</b><br>
+          Priority: <b>Level ${rule.priority_level}</b>
+          ${rule.golden_window_min ? ` &middot; golden window <b>${rule.golden_window_min} min</b>` : ""}
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:6px">${rule.guidance}</div>
+      </div>
+      ${result.relaxed ? `<div class="badge bad" style="display:block;padding:8px;margin-bottom:8px">${result.relaxation_note}</div>` : ""}`;
+
+    layers.hospitals.clearLayers();
+    const eligible = result.candidates.filter((c) => c.eligible);
+    const excluded = result.candidates.filter((c) => !c.eligible);
+
+    document.getElementById("rec-list").innerHTML =
+      eligible.map((c, i) => `
+        <div class="trip ${i === 0 ? "l1" : "l4"} hospital-option" data-id="${c.hospital_id}">
+          <div class="head">
+            <span class="ref">${i === 0 ? "&#9733; " : ""}${c.name}</span>
+            <span class="badge ${i === 0 ? "ok" : "warn"}">${(c.score * 100).toFixed(0)}</span>
+          </div>
+          <div class="meta">${c.travel_time_min ? c.travel_time_min + " min" : "-"} in current traffic &middot; ${c.distance_km} km</div>
+          <div class="meta">ED beds ${c.emergency_beds_available} &middot; ICU ${c.icu_beds_available} &middot; workload ${(c.workload_index * 100).toFixed(0)}%</div>
+          <div class="meta muted">capability ${(c.factors.capability * 100).toFixed(0)} &middot; time ${(c.factors.travel_time * 100).toFixed(0)} &middot; beds ${(c.factors.bed_availability * 100).toFixed(0)} &middot; load ${(c.factors.workload * 100).toFixed(0)}
+            ${c.within_golden_window === false ? ' &middot; <span class="badge bad">outside golden window</span>' : ""}</div>
+          ${(c.warnings || []).map((w) => `<div class="meta"><span class="badge bad">warning</span> ${w}</div>`).join("")}
+        </div>`).join("") +
+      (excluded.length ? `<div class="muted" style="font-size:11.5px;margin-top:8px">
+          Excluded: ${excluded.map((c) => `${c.name} (${c.exclusion_reason})`).join("; ")}</div>` : "");
+
+    result.candidates.forEach((c) => {
+      L.marker([c.latitude, c.longitude], {
+        icon: SEVPS.dotIcon(c.eligible ? (c.hospital_id === recommendedId ? "#2ecc71" : "#4da3ff") : "#7f8c9b", 12),
+      }).bindPopup(`<b>${c.name}</b><br>${c.eligible ? "eligible" : c.exclusion_reason}`).addTo(layers.hospitals);
+    });
+
+    document.querySelectorAll(".hospital-option").forEach((el) => {
+      el.onclick = () => {
+        document.querySelectorAll(".hospital-option").forEach((o) => o.classList.replace("l1", "l4"));
+        el.classList.replace("l4", "l1");
+        selectedHospitalId = parseInt(el.dataset.id, 10);
+        const isOverride = selectedHospitalId !== recommendedId;
+        document.getElementById("override-label").style.display = isOverride ? "" : "none";
+        document.getElementById("override-reason").style.display = isOverride ? "" : "none";
+      };
+    });
+  }
+
+  // ------------------------------------------------------------- confirm
+  document.getElementById("btn-confirm").onclick = async () => {
+    if (!currentTrip) {
+      log("no active trip - create one from the Operations screen first", "bad");
+      return;
+    }
+    const isOverride = selectedHospitalId && selectedHospitalId !== recommendedId;
+    const overrideReason = document.getElementById("override-reason").value.trim();
+    if (isOverride && !overrideReason) {
+      log("a reason is required to override the recommendation", "bad");
+      return;
+    }
+    const body = {
+      emergency_category: selectedCategory,
+      patient_notes: document.getElementById("p-notes").value,
+      patient_deteriorating: document.getElementById("p-deteriorating").checked,
+    };
+    const age = document.getElementById("p-age").value;
+    if (age) body.patient_age = parseInt(age, 10);
+    if (isOverride) { body.hospital_id = selectedHospitalId; body.override_reason = overrideReason; }
+
+    const button = document.getElementById("btn-confirm");
+    button.disabled = true;
+    try {
+      const result = await SEVPS.api(`/api/v1/dispatch/trips/${currentTrip.id}/assess/`, {
+        method: "POST", body,
+      });
+      currentTrip = result.trip;
+      renderTrip(result.trip);
+      renderCorridor(result.corridor || []);
+      log(`transporting to ${result.trip.hospital_name} - green corridor requested`, "ok");
+    } catch (err) {
+      log("assessment failed: " + err.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  // -------------------------------------------------------------- render
+  function renderPriority(level, siren, lights) {
+    document.getElementById("priority-box").innerHTML = `
+      <span class="badge ${SEVPS.LEVEL_CLASS[level] || "l4"}">${SEVPS.LEVEL_LABEL[level] || "Level " + level}</span>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        Siren: <b>${siren}</b> &middot; Lights: <b>${lights}</b></div>`;
+  }
+
+  function renderTrip(trip) {
+    currentTrip = trip;
+    const box = document.getElementById("trip-info");
+    if (!trip) {
+      box.innerHTML = '<div class="empty">No active trip.</div>';
+      return;
+    }
+    box.innerHTML = `
+      <div style="font-weight:700">${trip.reference}</div>
+      <div class="muted" style="font-size:12px">${trip.stage_display} &middot; ${trip.category_display}</div>
+      <div class="muted" style="font-size:12px">${trip.hospital_name ? "Destination: " + trip.hospital_name : "Destination not set"}</div>
+      <div style="margin-top:6px"><span class="eta" style="color:var(--accent);font-weight:700">ETA ${SEVPS.fmtEta(trip.eta)}</span>
+        <span class="muted"> &middot; ${SEVPS.fmtDistance(trip.distance_remaining_m)} remaining</span></div>
+      <div class="btn-row">
+        <button class="ghost" id="btn-onscene">On scene</button>
+        <button class="ghost" id="btn-handover">Handover</button>
+      </div>`;
+    renderPriority(trip.priority_level, trip.siren_mode, trip.light_pattern);
+
+    const onScene = document.getElementById("btn-onscene");
+    if (onScene) onScene.onclick = () => changeStage("on_scene");
+    const handover = document.getElementById("btn-handover");
+    if (handover) handover.onclick = () => changeStage("handover");
+
+    if (trip.active_route && trip.active_route.geometry) {
+      layers.route.clearLayers();
+      const line = L.polyline(trip.active_route.geometry, { color: "#4da3ff", weight: 6, opacity: .8 }).addTo(layers.route);
+      map.fitBounds(line.getBounds(), { padding: [40, 40] });
+    }
+  }
+
+  async function changeStage(stage) {
+    try {
+      const trip = await SEVPS.api(`/api/v1/dispatch/trips/${currentTrip.id}/stage/`, {
+        method: "POST", body: { stage },
+      });
+      renderTrip(trip);
+      log(`stage set to ${stage}`, "ok");
+    } catch (err) {
+      log("stage change failed: " + err.message, "bad");
+    }
+  }
+
+  function renderCorridor(rows) {
+    const open = (rows || []).filter((r) => ["planned", "armed", "active"].includes(r.state));
+    const box = document.getElementById("corridor");
+    layers.signals.clearLayers();
+    if (!open.length) {
+      box.innerHTML = '<div class="empty">No signals under priority control.</div>';
+      return;
+    }
+    box.innerHTML = open.map((r) => `
+      <div class="trip ${r.state === "active" ? "l1" : "l3"}">
+        <div class="head"><span class="ref">${r.intersection}</span>
+          <span class="badge ${r.state === "active" ? "ok" : "warn"}">${r.state}</span></div>
+        <div class="meta">green at ${SEVPS.fmtTime(r.planned_green_at)} &middot; hold ${Math.round(r.hold_duration_s)}s</div>
+      </div>`).join("");
+    open.forEach((r) => {
+      L.marker([r.latitude, r.longitude], {
+        icon: SEVPS.dotIcon(r.state === "active" ? "#2ecc71" : "#ffd166", 13),
+      }).bindPopup(`<b>${r.controller_id}</b><br>${r.state}`).addTo(layers.signals);
+    });
+  }
+
+  function upsertVehicle(v) {
+    const position = [v.latitude, v.longitude];
+    if (vehicleMarker) vehicleMarker.setLatLng(position);
+    else vehicleMarker = L.marker(position, { icon: SEVPS.vehicleIcon(v.priority_level, v.vehicle_type), zIndexOffset: 1000 }).addTo(map);
+    vehicleMarker.setIcon(SEVPS.vehicleIcon(v.priority_level, v.vehicle_type));
+    document.getElementById("veh-status").textContent = v.status;
+    renderPriority(v.priority_level, v.siren_mode, v.light_pattern);
+  }
+
+  // -------------------------------------------------------------- socket
+  new SEVPS.Socket(`/ws/vehicle/${encodeURIComponent(CALLSIGN)}/`, {
+    snapshot: (data) => {
+      upsertVehicle(data.vehicle);
+      renderTrip(data.trip);
+      renderCorridor(data.corridor);
+      if (data.route && data.route.geometry) {
+        layers.route.clearLayers();
+        L.polyline(data.route.geometry, { color: "#4da3ff", weight: 6, opacity: .8 }).addTo(layers.route);
+      }
+      if (data.vehicle) map.setView([data.vehicle.latitude, data.vehicle.longitude], 15);
+      log("connected to vehicle", "ok");
+    },
+    vehicle_position: (v) => { upsertVehicle(v); map.panTo([v.latitude, v.longitude]); },
+    priority_directive: (d) => {
+      renderPriority(d.level, d.siren_mode, d.light_pattern);
+      log(`${d.label} - ${d.trigger}`, d.is_upgrade ? "bad" : "ok");
+    },
+    route_updated: (r) => {
+      layers.route.clearLayers();
+      L.polyline(r.geometry, { color: "#4da3ff", weight: 6, opacity: .8 }).addTo(layers.route);
+      log(`route updated: ${r.reason}`);
+      refreshTrip();
+    },
+    trip_stage: () => refreshTrip(),
+  });
+
+  async function refreshTrip() {
+    const data = await SEVPS.api(`/api/v1/dispatch/trips/?vehicle=${encodeURIComponent(CALLSIGN)}&active=1`);
+    const rows = data.results || data;
+    renderTrip(rows.length ? rows[0] : null);
+    if (rows.length) {
+      const corridor = await SEVPS.api(`/api/v1/dispatch/trips/${rows[0].id}/corridor/`);
+      renderCorridor(corridor.corridor);
+    }
+  }
+
+  refreshTrip();
+  setInterval(() => { if (currentTrip) renderTrip(currentTrip); }, 2000);
+})();
+</script>
+{% endif %}
+{% endblock %}

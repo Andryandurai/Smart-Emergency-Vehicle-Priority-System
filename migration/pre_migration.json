@@ -1,0 +1,207 @@
+{
+  "database": {
+    "name": "D:\\SEVPS\\sevps.sqlite3",
+    "vendor": "sqlite"
+  },
+  "models": {
+    "alerts.DisplayBoard": {
+      "checksum": "57f0d231aeb357da6837338134d8cf64",
+      "rows": 22,
+      "spatial": {
+        "max_lat": 13.077231,
+        "max_lon": 80.261639,
+        "min_lat": 13.043422,
+        "min_lon": 80.226173,
+        "null_coordinates": 0
+      }
+    },
+    "alerts.DriverAlert": {
+      "checksum": "5a7bad01b39e12e39c61e07a922255ce",
+      "rows": 838,
+      "spatial": {
+        "max_lat": 13.080052,
+        "max_lon": 80.268543,
+        "min_lat": 13.037515,
+        "min_lon": 80.22576,
+        "null_coordinates": 0
+      }
+    },
+    "alerts.DriverDevice": {
+      "checksum": "5b4dafc4373463d22d0b834e9ae3b576",
+      "rows": 2,
+      "spatial": {
+        "max_lat": 13.088606,
+        "max_lon": 80.249699,
+        "min_lat": 13.03717,
+        "min_lon": 80.108567,
+        "null_coordinates": 0
+      }
+    },
+    "analytics.DailyMetric": {
+      "checksum": "4498ca02ef5f06e3b09440214a34475a",
+      "rows": 1
+    },
+    "analytics.Hotspot": {
+      "checksum": "e9afc082c223d03b940a3e5b4c96ca6a",
+      "rows": 17,
+      "spatial": {
+        "max_lat": 13.068506,
+        "max_lon": 80.265834,
+        "min_lat": 13.039682,
+        "min_lon": 80.233994,
+        "null_coordinates": 0
+      }
+    },
+    "dispatch.EmergencyTrip": {
+      "checksum": "c42c25b187de1e9ce3529a4143fe8b82",
+      "rows": 17
+    },
+    "dispatch.PriorityDirective": {
+      "checksum": "e54ef4e2da5902e564004e4a773a772d",
+      "rows": 62
+    },
+    "dispatch.RoutePlan": {
+      "checksum": "925c389b7e2d522d398ca161d1dc9514",
+      "rows": 46
+    },
+    "dispatch.SignalPreemption": {
+      "checksum": "d954037cd97b56efefd3c6eef6fcb8da",
+      "rows": 115
+    },
+    "fleet.EmergencyVehicle": {
+      "checksum": "3d04ab57f4e352971a93de18f65b6f4a",
+      "rows": 9,
+      "spatial": {
+        "max_lat": 13.07969,
+        "max_lon": 80.268591,
+        "min_lat": 13.045326,
+        "min_lon": 80.234592,
+        "null_coordinates": 0
+      }
+    },
+    "fleet.Station": {
+      "checksum": "50a3bf2823ed91de371c6519027dc6bc",
+      "rows": 4,
+      "spatial": {
+        "max_lat": 13.078584,
+        "max_lon": 80.265594,
+        "min_lat": 13.052863,
+        "min_lon": 80.238027,
+        "null_coordinates": 0
+      }
+    },
+    "fleet.VehicleTelemetry": {
+      "checksum": "80bf16281750e4e0ce5243c9698c8d09",
+      "rows": 831,
+      "spatial": {
+        "max_lat": 13.0814,
+        "max_lon": 80.268583,
+        "min_lat": 13.03717,
+        "min_lon": 80.225833,
+        "null_coordinates": 0
+      }
+    },
+    "hospitals.EmergencyRule": {
+      "checksum": "323b0ce8aa66cb5e75faded8b345d616",
+      "rows": 11
+    },
+    "hospitals.Hospital": {
+      "checksum": "8da8d07c3355776148d61a2bdd3216ea",
+      "rows": 8,
+      "spatial": {
+        "max_lat": 13.0814,
+        "max_lon": 80.2616,
+        "min_lat": 12.9984,
+        "min_lon": 80.1716,
+        "null_coordinates": 0
+      }
+    },
+    "hospitals.HospitalAlert": {
+      "checksum": "29fe7c07c58cf8b8ca39516226ad5aae",
+      "rows": 16
+    },
+    "hospitals.HospitalCapability": {
+      "checksum": "0e61106b623da034fb4caa80fc43fada",
+      "rows": 90
+    },
+    "hospitals.HospitalCapacity": {
+      "checksum": "4043e34678d64b61a6230a417681cae8",
+      "rows": 8
+    },
+    "hospitals.HospitalRecommendationLog": {
+      "checksum": "4109185c6e575f534a1103fe1729ed96",
+      "rows": 16
+    },
+    "network.AccidentRecord": {
+      "checksum": "aef5186a20102fcc4120dea60c080291",
+      "rows": 260,
+      "spatial": {
+        "max_lat": 13.083518,
+        "max_lon": 80.271773,
+        "min_lat": 13.034366,
+        "min_lon": 80.222884,
+        "null_coordinates": 0
+      }
+    },
+    "network.CameraFeed": {
+      "checksum": "98e1507b39f119178989f2e2861be682",
+      "rows": 22,
+      "spatial": {
+        "max_lat": 13.073557,
+        "max_lon": 80.261363,
+        "min_lat": 13.037719,
+        "min_lon": 80.22627,
+        "null_coordinates": 0
+      }
+    },
+    "network.Intersection": {
+      "checksum": "d367dda0720dd4582727236b88406f40",
+      "rows": 144,
+      "spatial": {
+        "max_lat": 13.080041,
+        "max_lon": 80.269792,
+        "min_lat": 13.037115,
+        "min_lon": 80.225732,
+        "null_coordinates": 0
+      }
+    },
+    "network.RoadEvent": {
+      "checksum": "1adeb9e138eb7a9baba49771d1deb7f9",
+      "rows": 12,
+      "spatial": {
+        "max_lat": 13.07894,
+        "max_lon": 80.265252,
+        "min_lat": 13.038142,
+        "min_lon": 80.226052,
+        "null_coordinates": 0
+      }
+    },
+    "network.RoadSegment": {
+      "checksum": "e4fe060a9f4007344a4ddfcac9d9f9cd",
+      "rows": 518,
+      "spatial": {
+        "max_lat": 13.079491,
+        "max_lon": 80.269224,
+        "min_lat": 13.037262,
+        "min_lon": 80.226052,
+        "null_coordinates": 0
+      }
+    },
+    "network.TrafficObservation": {
+      "checksum": "e9b04537e253ce977e25734e2789f5aa",
+      "rows": 67
+    },
+    "network.TrafficProfile": {
+      "checksum": "00000000000000000000000000000000",
+      "rows": 0
+    },
+    "network.TrafficSignal": {
+      "checksum": "805ce2d5e349f946bc5f09d5bac02ee1",
+      "rows": 58
+    }
+  },
+  "totals": {
+    "models": 26,
+    "rows": 3194
+  }
+}

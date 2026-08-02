@@ -1,0 +1,49 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SEVPS{% endblock %}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{% static 'css/sevps.css' %}">
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header class="topbar">
+    <a class="brand" href="/legacy/">
+      <span class="brand-mark">SEVPS</span>
+      <span class="brand-sub">Smart Emergency Vehicle Priority System</span>
+    </a>
+    <nav class="topnav">
+      <a href="/legacy/" class="{% block nav_ops %}{% endblock %}">Operations</a>
+      <a href="/legacy/hospitals/" class="{% block nav_hosp %}{% endblock %}">Hospitals</a>
+      <a href="/legacy/paramedic/" class="{% block nav_para %}{% endblock %}">Paramedic</a>
+      <a href="/legacy/driver/" class="{% block nav_driver %}{% endblock %}">Driver</a>
+      <a href="/legacy/boards/" class="{% block nav_boards %}{% endblock %}">Boards</a>
+      <a href="/legacy/analytics/" class="{% block nav_analytics %}{% endblock %}">Analytics</a>
+      <a href="/api/v1/" target="_blank" rel="noopener">API</a>
+      {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
+    </nav>
+    <div class="conn" id="conn-status" data-state="connecting">
+      <span class="dot"></span><span class="label">connecting</span>
+    </div>
+    <div class="whoami">
+      {% if user.is_authenticated %}
+        <span class="who">{{ user.get_username }}</span>
+        <span class="role">{% for g in user.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% empty %}{% if user.is_superuser %}administrator{% else %}read-only{% endif %}{% endfor %}</span>
+        <form method="post" action="/legacy/logout/">{% csrf_token %}<button type="submit" class="linkish">Sign out</button></form>
+      {% else %}
+        <a class="signin" href="/legacy/login/?next={{ request.path }}">Sign in</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="{% static 'js/sevps.js' %}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

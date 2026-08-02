@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Traffic Analytics - SEVPS{% endblock %}
+{% block nav_analytics %}active{% endblock %}
+
+{% block content %}
+<div class="page scroll">
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap">
+    <div>
+      <h1>AI Traffic Analytics</h1>
+      <p>Response performance, green corridor usage and the network's problem locations.</p>
+    </div>
+    <div style="width:180px">
+      <label for="window">Window</label>
+      <select id="window">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+  </div>
+
+  <h2>Emergency response times</h2>
+  <div class="stat-row" id="response-stats"></div>
+
+  <h2>Green corridor usage &amp; cost</h2>
+  <div class="stat-row" id="corridor-stats"></div>
+
+  <div class="grid-2" style="margin-top:18px">
+    <div class="card pad-0">
+      <div style="padding:12px 12px 0"><h3>Congestion hotspots</h3></div>
+      <div id="congestion"><div class="empty">No observations yet.</div></div>
+    </div>
+    <div class="card pad-0">
+      <div style="padding:12px 12px 0"><h3>High-delay intersections</h3></div>
+      <div id="delays"><div class="empty">No preemption history yet.</div></div>
+    </div>
+  </div>
+
+  <h2>Accident hotspots (feature 4.9)</h2>
+  <div class="grid-2">
+    <div class="card pad-0" style="min-height:380px"><div id="hotmap" class="map" style="height:380px;border-radius:10px"></div></div>
+    <div class="card pad-0">
+      <div style="padding:12px 12px 0;display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">Identified locations</h3>
+        <button class="ghost" id="btn-recompute" style="width:auto;padding:5px 10px;font-size:12px">Recompute</button>
+      </div>
+      <div id="hotspots"><div class="empty">No accident archive loaded.</div></div>
+    </div>
+  </div>
+
+  <h2>Fleet movement</h2>
+  <div class="card" id="movement"><div class="empty">Loading...</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const hotmap = SEVPS.createMap("hotmap", [{{ map_center.0 }}, {{ map_center.1 }}], 12);
+  const hotLayer = L.layerGroup().addTo(hotmap);
+
+  function stat(value, label, sub) {
+    return `<div class="stat"><div class="value">${value}</div><div class="label">${label}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  }
+
+  function table(headers, rows) {
+    if (!rows.length) return '<div class="empty">No data in this window.</div>';
+    return `<table class="data"><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  }
+
+  async function load() {
+    const days = document.getElementById("window").value;
+    const data = await SEVPS.api(`/api/v1/analytics/summary/?days=${days}`);
+
+    const rt = data.response_times;
+    document.getElementById("response-stats").innerHTML =
+      stat(rt.trips, "Trips", `${rt.completed} completed &middot; ${rt.cancelled} cancelled`) +
+      stat(rt.response_time.avg_min !== null ? rt.response_time.avg_min + "m" : "-", "Avg response", `median ${SEVPS.fmtDuration(rt.response_time.median_s)}`) +
+      stat(SEVPS.fmtDuration(rt.response_time.p90_s), "p90 response", `best ${SEVPS.fmtDuration(rt.response_time.best_s)}`) +
+      stat(SEVPS.fmtDuration(rt.transport_time.avg_s), "Avg transport", `${rt.transport_time.count} measured`) +
+      stat(SEVPS.fmtDuration(rt.total_time.avg_s), "Avg call-to-hospital", "dispatch to arrival");
+
+    const cu = data.corridor_usage;
+    document.getElementById("corridor-stats").innerHTML =
+      stat(cu.preemptions_requested, "Preemptions requested", `${cu.activated} activated`) +
+      stat(cu.trips_with_corridor, "Trips with a corridor", `${cu.yielded} yielded to higher priority`) +
+      stat(SEVPS.fmtDuration(cu.total_hold_seconds), "Total cross-traffic hold", `avg ${SEVPS.fmtDuration(cu.avg_hold_seconds)} per junction`) +
+      stat(cu.eta_accuracy.mean_abs_error_s !== null ? cu.eta_accuracy.mean_abs_error_s + "s" : "-", "Mean ETA error", `${cu.eta_accuracy.samples} samples`) +
+      stat(cu.failed, "Controller failures", "fell back to normal timing");
+
+    document.getElementById("congestion").innerHTML = table(
+      ["Road", "Avg speed", "Heavy share", "Samples"],
+      data.congestion_hotspots.map((h) => [
+        h.name, h.avg_speed_kmh + " km/h",
+        `<span class="badge ${h.heavy_share > 0.5 ? "bad" : "warn"}">${(h.heavy_share * 100).toFixed(0)}%</span>`,
+        h.samples,
+      ])
+    );
+
+    document.getElementById("delays").innerHTML = table(
+      ["Junction", "Events", "Avg clearance", "ETA error"],
+      data.high_delay_intersections.map((d) => [
+        d.name, d.events, d.avg_clearance_s + "s", d.avg_eta_error_s + "s",
+      ])
+    );
+
+    const m = data.movement;
+    document.getElementById("movement").innerHTML =
+      `<div class="stat-row">
+        ${stat(m.fleet.total, "Fleet size", `${m.fleet.online} online &middot; ${m.fleet.on_mission} on mission`)}
+        ${stat(m.planned_distance_km + " km", "Planned distance", "active routes")}
+        ${stat(m.reroutes, "Dynamic reroutes", "feature 4.10")}
+        ${stat(m.telemetry_points.toLocaleString(), "GPS fixes ingested", "")}
+        ${stat(m.hospital_overrides, "Crew overrides", "recommendation not followed")}
+      </div>
+      <div style="margin-top:14px">${table(["Emergency category", "Trips"],
+        Object.entries(m.trips_by_category).map(([k, v]) => [k, v]))}</div>`;
+  }
+
+  async function loadHotspots() {
+    const data = await SEVPS.api("/api/v1/analytics/accident-hotspots/");
+    const rows = data.hotspots || [];
+    hotLayer.clearLayers();
+    document.getElementById("hotspots").innerHTML = table(
+      ["Location", "Incidents", "Score"],
+      rows.map((h) => [h.label || "-", h.incident_count, (h.score * 100).toFixed(0)])
+    );
+    rows.forEach((h) => {
+      L.circle([h.latitude, h.longitude], {
+        radius: 120 + 260 * h.score,
+        color: "#e74c3c", weight: 1, fillOpacity: 0.15 + 0.4 * h.score,
+      }).bindPopup(`<b>${h.label}</b><br>${h.incident_count} incidents<br>score ${(h.score * 100).toFixed(0)}`).addTo(hotLayer);
+    });
+    if (rows.length) hotmap.fitBounds(hotLayer.getBounds(), { padding: [30, 30] });
+  }
+
+  document.getElementById("btn-recompute").onclick = async () => {
+    try {
+      await SEVPS.api("/api/v1/analytics/accident-hotspots/recompute/", { method: "POST", body: {} });
+      loadHotspots();
+    } catch (err) {
+      alert("Recompute requires operator sign-in: " + err.message);
+    }
+  };
+
+  document.getElementById("window").onchange = load;
+  load();
+  loadHotspots();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Sign in - SEVPS{% endblock %}
+
+{% block content %}
+<div class="page scroll">
+  <div style="max-width:420px;margin:8vh auto">
+    <div class="page-head" style="text-align:center">
+      <h1>Sign in to SEVPS</h1>
+      <p>Dashboards are read-only until you sign in. Writing to the platform —
+         confirming an assessment, holding a signal, publishing capacity —
+         requires the matching role.</p>
+    </div>
+
+    <form method="post" class="card">
+      {% csrf_token %}
+      {% if form.errors %}
+        <div class="badge bad" style="display:block;padding:9px;margin-bottom:12px">
+          Incorrect username or password.
+        </div>
+      {% endif %}
+
+      <label for="id_username">Username</label>
+      <input id="id_username" name="username" autocomplete="username" autofocus required>
+
+      <label for="id_password">Password</label>
+      <input id="id_password" name="password" type="password" autocomplete="current-password" required>
+
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="btn-row"><button type="submit">Sign in</button></div>
+    </form>
+
+    {% if SEVPS_DEBUG %}
+    <div class="card">
+      <h3>Demo accounts</h3>
+      <table class="data">
+        <thead><tr><th>Username</th><th>Password</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">admin</td><td class="mono">sevps-admin</td><td>Full administrator</td></tr>
+          <tr><td class="mono">operator</td><td class="mono">sevps-operator</td><td>Traffic control room</td></tr>
+          <tr><td class="mono">paramedic</td><td class="mono">sevps-paramedic</td><td>Ambulance crew</td></tr>
+          <tr><td class="mono">hospital</td><td class="mono">sevps-hospital</td><td>Hospital emergency dept</td></tr>
+        </tbody>
+      </table>
+      <div class="muted" style="font-size:11.5px;margin-top:10px">
+        Shown because <code>DEBUG=1</code>. Create these with
+        <code>python manage.py seed_users</code>. They are never shown in production.
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

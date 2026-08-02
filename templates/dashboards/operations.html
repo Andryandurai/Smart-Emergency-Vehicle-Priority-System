@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block title %}Emergency Operations - SEVPS{% endblock %}
+{% block nav_ops %}active{% endblock %}
+
+{% block content %}
+<div class="split wide">
+  <aside class="sidebar">
+    <div class="stat-row">
+      <div class="stat"><div class="value" id="s-trips">{{ active_trips }}</div><div class="label">Active trips</div></div>
+      <div class="stat"><div class="value" id="s-vehicles">{{ vehicles_online }}</div><div class="label">Vehicles online</div></div>
+      <div class="stat"><div class="value" id="s-corridors">0</div><div class="label">Signals held</div></div>
+      <div class="stat"><div class="value" id="s-alerts">0</div><div class="label">Live alerts</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Active emergency vehicles</h3>
+      <div id="trip-list"><div class="empty">No active trips. Start one from the Paramedic screen or run the simulator.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Green corridor &mdash; signal status</h3>
+      <div id="corridor-list"><div class="empty">No signals under priority control.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Network disruptions</h3>
+      <div id="event-list"><div class="empty">Network clear.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Live event log</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </aside>
+
+  <div id="map"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const CENTRE = [{{ map_center.0 }}, {{ map_center.1 }}];
+  const map = SEVPS.createMap("map", CENTRE, {{ map_zoom }});
+  const log = SEVPS.logger("log");
+
+  const layers = {
+    network: L.layerGroup().addTo(map),
+    hospitals: L.layerGroup().addTo(map),
+    signals: L.layerGroup().addTo(map),
+    routes: L.layerGroup().addTo(map),
+    vehicles: L.layerGroup().addTo(map),
+    alerts: L.layerGroup().addTo(map),
+    events: L.layerGroup().addTo(map),
+    boards: L.layerGroup().addTo(map),
+  };
+
+  L.control.layers(null, {
+    "Road network": layers.network,
+    "Hospitals": layers.hospitals,
+    "Traffic signals": layers.signals,
+    "Routes": layers.routes,
+    "Driver alerts": layers.alerts,
+    "Disruptions": layers.events,
+    "Display boards": layers.boards,
+  }, { position: "topright", collapsed: true }).addTo(map);
+
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = function () {
+    const div = L.DomUtil.create("div", "legend");
+    div.innerHTML =
+      '<div><span class="k" style="background:#ff4d4f"></span>Level 1 critical</div>' +
+      '<div><span class="k" style="background:#ff9f43"></span>Level 2 high</div>' +
+      '<div><span class="k" style="background:#ffd166"></span>Level 3 moderate</div>' +
+      '<div><span class="k" style="background:#7f8c9b"></span>Level 4 transport</div>' +
+      '<div><span class="k" style="background:#2ecc71"></span>Signal green (held)</div>' +
+      '<div><span class="k" style="background:#e74c3c"></span>Congested / blocked</div>';
+    return div;
+  };
+  legend.addTo(map);
+
+  const vehicleMarkers = {};   // callsign -> marker
+  const routeLines = {};       // trip_id -> polyline
+  const signalMarkers = {};    // signal id -> marker
+  const alertCircles = {};     // alert uuid -> circle
+  const boardMarkers = {};
+  let trips = {};              // trip_id -> trip
+  let preemptions = [];
+  let events = [];
+  let followed = null;
+
+  // ------------------------------------------------------------ rendering
+  function levelClass(level) { return SEVPS.LEVEL_CLASS[level] || "l4"; }
+
+  function renderTrips() {
+    const container = document.getElementById("trip-list");
+    const rows = Object.values(trips).sort((a, b) => a.priority_level - b.priority_level);
+    document.getElementById("s-trips").textContent = rows.length;
+
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No active trips.</div>';
+      return;
+    }
+    container.innerHTML = rows.map((t) => `
+      <div class="trip ${levelClass(t.priority_level)}" data-trip="${t.id}" data-callsign="${t.vehicle_callsign}">
+        <div class="head">
+          <span class="ref">${t.reference} &middot; ${t.vehicle_callsign}</span>
+          <span class="badge ${levelClass(t.priority_level)}">L${t.priority_level}</span>
+        </div>
+        <div class="meta">${t.category_display || t.emergency_category} &middot; ${t.stage_display || t.stage}</div>
+        <div class="meta">${t.hospital_name ? "&rarr; " + t.hospital_name : "<em>hospital not yet assigned</em>"}</div>
+        <div class="meta">
+          <span class="eta">ETA ${SEVPS.fmtEta(t.eta)}</span>
+          &middot; ${SEVPS.fmtDistance(t.distance_remaining_m)} remaining
+          &middot; siren: ${t.siren_mode}
+        </div>
+      </div>`).join("");
+
+    container.querySelectorAll(".trip").forEach((el) => {
+      el.onclick = () => {
+        followed = el.dataset.callsign;
+        const marker = vehicleMarkers[followed];
+        if (marker) map.setView(marker.getLatLng(), 15);
+      };
+    });
+  }
+
+  function renderCorridor() {
+    const open = preemptions.filter((p) => ["planned", "armed", "active"].includes(p.state));
+    document.getElementById("s-corridors").textContent =
+      open.filter((p) => p.state === "active").length;
+
+    const container = document.getElementById("corridor-list");
+    if (!open.length) {
+      container.innerHTML = '<div class="empty">No signals under priority control.</div>';
+      return;
+    }
+    container.innerHTML = `<table class="data"><thead><tr>
+        <th>Junction</th><th>State</th><th>Green at</th><th>Hold</th></tr></thead><tbody>` +
+      open.map((p) => `<tr>
+          <td>${p.intersection || p.controller_id}</td>
+          <td><span class="badge ${p.state === "active" ? "ok" : "warn"}">${p.state}</span></td>
+          <td class="mono">${SEVPS.fmtTime(p.planned_green_at)}</td>
+          <td class="mono">${Math.round(p.hold_duration_s)}s</td>
+        </tr>`).join("") + "</tbody></table>";
+  }
+
+  function renderEvents() {
+    const container = document.getElementById("event-list");
+    if (!events.length) {
+      container.innerHTML = '<div class="empty">Network clear.</div>';
+      return;
+    }
+    container.innerHTML = events.slice(0, 12).map((e) => `
+      <div class="trip ${e.blocks_road ? "l1" : "l3"}">
+        <div class="head"><span class="ref">${e.event_type_display || e.event_type}</span>
+        <span class="badge ${e.blocks_road ? "bad" : "warn"}">${Math.round(e.severity * 100)}%</span></div>
+        <div class="meta">${e.description || "reported"} &middot; source: ${e.source}</div>
+      </div>`).join("");
+  }
+
+  function upsertVehicle(v) {
+    const position = [v.latitude, v.longitude];
+    if (vehicleMarkers[v.callsign]) {
+      vehicleMarkers[v.callsign].setLatLng(position);
+      vehicleMarkers[v.callsign].setIcon(SEVPS.vehicleIcon(v.priority_level, v.vehicle_type));
+    } else {
+      vehicleMarkers[v.callsign] = L.marker(position, {
+        icon: SEVPS.vehicleIcon(v.priority_level, v.vehicle_type),
+        zIndexOffset: 1000,
+      }).addTo(layers.vehicles);
+    }
+    vehicleMarkers[v.callsign].bindPopup(
+      `<b>${v.callsign}</b><br>${v.status} &middot; ${Math.round(v.speed_kmh)} km/h<br>` +
+      `${SEVPS.LEVEL_LABEL[v.priority_level] || ""}<br>siren: ${v.siren_mode}`
+    );
+    if (followed === v.callsign) map.panTo(position);
+    document.getElementById("s-vehicles").textContent = Object.keys(vehicleMarkers).length;
+  }
+
+  function drawRoute(tripId, geometry) {
+    if (routeLines[tripId]) layers.routes.removeLayer(routeLines[tripId]);
+    if (!geometry || geometry.length < 2) return;
+    routeLines[tripId] = L.polyline(geometry, {
+      color: "#4da3ff", weight: 5, opacity: 0.75, dashArray: "1 8", lineCap: "round",
+    }).addTo(layers.routes);
+  }
+
+  function drawAlert(alert) {
+    if (alertCircles[alert.uuid]) layers.alerts.removeLayer(alertCircles[alert.uuid]);
+    alertCircles[alert.uuid] = L.circle([alert.latitude, alert.longitude], {
+      radius: alert.radius_m, color: "#ff9f43", weight: 1, fillOpacity: 0.10,
+    }).bindPopup(alert.message).addTo(layers.alerts);
+    document.getElementById("s-alerts").textContent = Object.keys(alertCircles).length;
+    setTimeout(() => {
+      if (alertCircles[alert.uuid]) {
+        layers.alerts.removeLayer(alertCircles[alert.uuid]);
+        delete alertCircles[alert.uuid];
+        document.getElementById("s-alerts").textContent = Object.keys(alertCircles).length;
+      }
+    }, Math.max(8, alert.eta_seconds) * 1000);
+  }
+
+  function drawSignal(signal) {
+    const colour = signal.is_preempted ? "#2ecc71" : (signal.is_online ? "#8b98a9" : "#e74c3c");
+    if (signalMarkers[signal.id]) layers.signals.removeLayer(signalMarkers[signal.id]);
+    signalMarkers[signal.id] = L.marker([signal.latitude, signal.longitude], {
+      icon: SEVPS.dotIcon(colour, signal.is_preempted ? 14 : 8),
+    }).bindPopup(
+      `<b>${signal.controller_id}</b><br>${signal.intersection_name || ""}<br>` +
+      `phase: ${signal.current_phase}${signal.is_preempted ? " (priority hold)" : ""}`
+    ).addTo(layers.signals);
+  }
+
+  // -------------------------------------------------------------- network
+  SEVPS.api("/api/v1/network/segments/geojson/?limit=4000").then((collection) => {
+    L.geoJSON(collection, {
+      style: (feature) => ({
+        color: feature.properties.is_open
+          ? SEVPS.congestionColour(feature.properties.congestion_index)
+          : "#e74c3c",
+        weight: feature.properties.is_open ? 2 : 4,
+        opacity: 0.55,
+      }),
+      onEachFeature: (feature, layer) => {
+        layer.bindPopup(
+          `<b>${feature.properties.name || "Road segment"}</b><br>` +
+          `${feature.properties.congestion_level} &middot; ` +
+          `${feature.properties.speed_kmh ? Math.round(feature.properties.speed_kmh) + " km/h" : "no live speed"}`
+        );
+      },
+    }).addTo(layers.network);
+  }).catch(() => log("road network not loaded - run seed_demo", "warn"));
+
+  // ------------------------------------------------------------- socket
+  const socket = new SEVPS.Socket("/ws/ops/", {
+    snapshot: (data) => {
+      trips = {};
+      (data.trips || []).forEach((t) => { trips[t.id] = t; });
+      (data.vehicles || []).forEach(upsertVehicle);
+      (data.routes || []).forEach((r) => drawRoute(r.trip_id, r.geometry));
+      (data.signals || []).forEach(drawSignal);
+      (data.hospitals || []).forEach((h) => {
+        L.marker([h.latitude, h.longitude], { icon: SEVPS.dotIcon(h.is_on_diversion ? "#e74c3c" : "#2ecc71", 12) })
+          .bindPopup(`<b>${h.name}</b><br>${h.code}${h.is_on_diversion ? "<br><b>ON DIVERSION</b>" : ""}`)
+          .addTo(layers.hospitals);
+      });
+      (data.boards || []).forEach((b) => {
+        boardMarkers[b.code] = L.marker([b.latitude, b.longitude], { icon: SEVPS.dotIcon("#ffb300", 9) })
+          .bindPopup(`<b>${b.code}</b><br>${b.message || "(blank)"}`).addTo(layers.boards);
+      });
+      preemptions = data.preemptions || [];
+      events = data.events || [];
+      (data.recent_alerts || []).forEach(drawAlert);
+      renderTrips(); renderCorridor(); renderEvents();
+      log("connected - snapshot loaded", "ok");
+    },
+
+    vehicle_position: (v) => {
+      upsertVehicle(v);
+      Object.values(trips).forEach((t) => {
+        if (t.vehicle_callsign === v.callsign) {
+          t.vehicle_latitude = v.latitude;
+          t.vehicle_longitude = v.longitude;
+        }
+      });
+    },
+
+    trip_created: (t) => {
+      log(`${t.reference}: dispatched ${t.vehicle}`, "warn");
+      refreshTrips();
+    },
+
+    trip_stage: (t) => {
+      log(`${t.reference}: ${t.previous_stage} &rarr; ${t.stage}`);
+      refreshTrips();
+    },
+
+    hospital_assigned: (t) => {
+      log(`${t.reference}: routed to ${t.hospital.name}${t.was_overridden ? " (crew override)" : ""}`, "ok");
+      refreshTrips();
+    },
+
+    route_updated: (r) => {
+      drawRoute(r.trip_id, r.geometry);
+      log(`${r.reference}: route ${SEVPS.fmtDistance(r.distance_m)} / ${SEVPS.fmtDuration(r.duration_s)} - ${r.reason}`);
+      refreshTrips();
+    },
+
+    route_failed: (r) => log(`${r.reference}: route failed - ${r.detail}`, "bad"),
+
+    priority_directive: (d) => {
+      const tone = d.is_upgrade ? "bad" : (d.is_downgrade ? "ok" : "warn");
+      log(`${d.reference}: ${d.label} - ${d.trigger}`, tone);
+      refreshTrips();
+    },
+
+    signal_preempted: (s) => {
+      log(`signal ${s.controller_id} held green ${Math.round(s.duration_s)}s for ${s.vehicle || s.trip_reference}`, "ok");
+      refreshPreemptions();
+    },
+
+    signal_released: (s) => {
+      log(`signal ${s.controller_id} restored to normal timing`);
+      refreshPreemptions();
+    },
+
+    signal_conflict: (c) => log(`junction conflict resolved in favour of ${c.winner}`, "warn"),
+
+    driver_alerts: (payload) => (payload.alerts || []).forEach(drawAlert),
+
+    display_board: (b) => {
+      if (boardMarkers[b.board]) boardMarkers[b.board].bindPopup(`<b>${b.board}</b><br>${b.message}`);
+      log(`board ${b.board}: ${b.message}`);
+    },
+
+    road_event_created: (e) => { events.unshift(e); renderEvents(); log(`disruption: ${e.event_type} reported`, "bad"); },
+    road_event_cleared: () => refreshEvents(),
+    road_events: (payload) => { events = (payload.events || []).concat(events); renderEvents(); },
+    hospital_alert: (a) => log(`hospital ${a.hospital_name}: pre-arrival alert sent`, "ok"),
+    hospital_ack: (a) => log(`hospital ${a.hospital_name}: acknowledged by ${a.acknowledged_by || "staff"}`, "ok"),
+    hospital_diversion: (h) => log(`${h.hospital} diversion ${h.is_on_diversion ? "declared" : "lifted"}`, "warn"),
+  });
+
+  // Sidebar state is cheap to refetch and always consistent this way.
+  let pending = null;
+  function refreshTrips() {
+    clearTimeout(pending);
+    pending = setTimeout(async () => {
+      const data = await SEVPS.api("/api/v1/dispatch/trips/live/");
+      trips = {};
+      (data.trips || []).forEach((t) => { trips[t.id] = t; });
+      renderTrips();
+      (data.trips || []).forEach((t) => {
+        if (t.active_route) drawRoute(t.id, t.active_route.geometry);
+      });
+    }, 250);
+  }
+
+  async function refreshPreemptions() {
+    const data = await SEVPS.api("/api/v1/dispatch/preemptions/?open=1&limit=100");
+    preemptions = data.results || data;
+    renderCorridor();
+    preemptions.forEach((p) => drawSignal({
+      id: p.signal, latitude: p.latitude, longitude: p.longitude,
+      controller_id: p.controller_id, intersection_name: p.intersection,
+      current_phase: p.state === "active" ? "green" : "red",
+      is_preempted: p.state === "active", is_online: true,
+    }));
+  }
+
+  async function refreshEvents() {
+    const data = await SEVPS.api("/api/v1/network/events/?active=1&limit=50");
+    events = data.results || data;
+    renderEvents();
+  }
+
+  async function refreshVehicles() {
+    const data = await SEVPS.api("/api/v1/fleet/vehicles/live/");
+    (data.vehicles || []).forEach(upsertVehicle);
+  }
+
+  // Fallback polling.
+  //
+  // The WebSocket is the fast path, but with the default in-memory channel
+  // layer it only carries events raised inside the server process; anything
+  // published by `sevps_worker` or `simulate` in another process never
+  // reaches this socket. (Set SEVPS_REDIS_URL to fan out across processes.)
+  // Polling keeps this board correct under every deployment topology, and
+  // the socket simply makes it instant when it can.
+  SEVPS.poll(refreshVehicles, 2000);
+  SEVPS.poll(refreshTrips, 3000);
+  SEVPS.poll(refreshPreemptions, 4000);
+  SEVPS.poll(refreshEvents, 10000);
+
+  // ETAs are relative, so re-render the list once a second.
+  setInterval(renderTrips, 1000);
+})();
+</script>
+{% endblock %}

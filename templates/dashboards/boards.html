@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Display Boards - SEVPS{% endblock %}
+{% block nav_boards %}active{% endblock %}
+
+{% block content %}
+<div class="page scroll">
+  <div class="page-head">
+    <h1>Digital road display boards</h1>
+    <p>Layer 4 pushes advance warnings to roadside variable-message signs and smart-city displays.
+       This wall mirrors exactly what each sign is showing right now.</p>
+  </div>
+  <div class="grid-2" id="wall"><div class="empty">Loading boards...</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const wall = document.getElementById("wall");
+  const boards = {};
+
+  function render() {
+    const rows = Object.values(boards);
+    if (!rows.length) {
+      wall.innerHTML = '<div class="card"><div class="empty">No display boards registered. Run <code>python manage.py seed_demo</code>.</div></div>';
+      return;
+    }
+    wall.innerHTML = rows.map((b) => `
+      <div class="card">
+        <h3>${b.code} &middot; ${b.name || ""}</h3>
+        <div class="board ${b.message ? "" : "blank"}">${b.message || "- NO ACTIVE MESSAGE -"}</div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">
+          ${b.expires_at ? "expires " + SEVPS.fmtTime(b.expires_at) : "idle"}
+          &middot; ${b.latitude.toFixed(4)}, ${b.longitude.toFixed(4)}
+        </div>
+      </div>`).join("");
+  }
+
+  async function load() {
+    const rows = await SEVPS.api("/api/v1/alerts/boards/live/");
+    rows.forEach((b) => { boards[b.code] = b; });
+    render();
+  }
+
+  new SEVPS.Socket("/ws/ops/", {
+    snapshot: (data) => { (data.boards || []).forEach((b) => { boards[b.code] = Object.assign(boards[b.code] || {}, b); }); render(); },
+    display_board: (b) => {
+      boards[b.board] = Object.assign(boards[b.board] || { code: b.board, latitude: b.latitude, longitude: b.longitude }, {
+        message: b.message, expires_at: b.expires_at,
+      });
+      render();
+    },
+    display_boards_cleared: load,
+  });
+
+  load();
+  setInterval(load, 15000);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}{{ hospital.name }} - Preparedness - SEVPS{% endblock %}
+{% block nav_hosp %}active{% endblock %}
+
+{% block content %}
+<div class="split right">
+  <div id="map"></div>
+  <aside class="sidebar right">
+    <div class="card">
+      <h3>Receiving hospital</h3>
+      <div style="font-size:18px;font-weight:700">{{ hospital.name }}</div>
+      <div class="muted" style="font-size:12px">{{ hospital.code }} &middot; {{ hospital.city }}</div>
+      <div class="muted" style="font-size:12px">{{ hospital.emergency_phone|default:hospital.phone }}</div>
+      <div id="diversion-box" style="margin-top:8px"></div>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat"><div class="value" id="s-inbound">0</div><div class="label">Inbound</div></div>
+      <div class="stat"><div class="value" id="s-ed">-</div><div class="label">ED beds free</div></div>
+      <div class="stat"><div class="value" id="s-icu">-</div><div class="label">ICU beds free</div></div>
+      <div class="stat"><div class="value" id="s-load">-</div><div class="label">Workload</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Inbound patients</h3>
+      <div id="inbound-list"><div class="empty">No inbound emergency vehicles.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Pre-arrival alerts</h3>
+      <div id="alert-list"><div class="empty">No alerts.</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Update live capacity</h3>
+      <div class="grid-2" style="gap:8px">
+        <div><label for="c-ed">ED beds available</label><input id="c-ed" type="number" min="0"></div>
+        <div><label for="c-icu">ICU beds available</label><input id="c-icu" type="number" min="0"></div>
+        <div><label for="c-wait">Patients waiting</label><input id="c-wait" type="number" min="0"></div>
+        <div><label for="c-doc">Doctors on duty</label><input id="c-doc" type="number" min="0"></div>
+      </div>
+      <div class="btn-row">
+        <button id="btn-capacity">Publish capacity</button>
+        <button class="ghost danger" id="btn-diversion">Toggle diversion</button>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:8px">
+        Capacity feeds the recommendation engine directly &mdash; stale figures are down-weighted automatically.
+      </div>
+    </div>
+
+    <div class="card"><h3>Activity</h3><div class="log" id="log"></div></div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const CODE = "{{ hospital.code|escapejs }}";
+  const HOSPITAL_ID = {{ hospital.id }};
+  const map = SEVPS.createMap("map", [{{ hospital.latitude }}, {{ hospital.longitude }}], 13);
+  const log = SEVPS.logger("log");
+
+  L.marker([{{ hospital.latitude }}, {{ hospital.longitude }}], { icon: SEVPS.dotIcon("#2ecc71", 16) })
+    .bindPopup("<b>{{ hospital.name|escapejs }}</b>").addTo(map);
+
+  const vehicleMarkers = {};
+  const routeLines = {};
+  let inbound = [];
+  let onDiversion = {{ hospital.is_on_diversion|yesno:"true,false" }};
+
+  function renderCapacity(capacity) {
+    if (!capacity) return;
+    document.getElementById("s-ed").textContent = capacity.emergency_beds_available;
+    document.getElementById("s-icu").textContent = capacity.icu_beds_available;
+    document.getElementById("s-load").textContent = Math.round((capacity.workload_index || 0) * 100) + "%";
+    document.getElementById("c-ed").value = capacity.emergency_beds_available;
+    document.getElementById("c-icu").value = capacity.icu_beds_available;
+    document.getElementById("c-wait").value = capacity.patients_waiting;
+    document.getElementById("c-doc").value = capacity.doctors_on_duty;
+    if (capacity.is_stale) log("capacity data is over 30 minutes old", "warn");
+  }
+
+  function renderDiversion() {
+    document.getElementById("diversion-box").innerHTML = onDiversion
+      ? '<span class="badge bad">ON DIVERSION - excluded from recommendations</span>'
+      : '<span class="badge ok">Accepting emergency arrivals</span>';
+  }
+
+  function renderInbound() {
+    document.getElementById("s-inbound").textContent = inbound.length;
+    const box = document.getElementById("inbound-list");
+    if (!inbound.length) {
+      box.innerHTML = '<div class="empty">No inbound emergency vehicles.</div>';
+      return;
+    }
+    inbound.sort((a, b) => new Date(a.eta || 0) - new Date(b.eta || 0));
+    box.innerHTML = inbound.map((t) => `
+      <div class="trip ${SEVPS.LEVEL_CLASS[t.priority_level] || "l4"}">
+        <div class="head">
+          <span class="ref">${t.vehicle}</span>
+          <span class="badge ${SEVPS.LEVEL_CLASS[t.priority_level] || "l4"}">L${t.priority_level}</span>
+        </div>
+        <div class="meta"><b>${t.emergency_category_display || t.emergency_category}</b>${t.patient_age ? ` &middot; age ${t.patient_age}` : ""}</div>
+        <div class="meta">${t.stage_display || t.stage} &middot; ${t.route_status.replace("_", " ")}</div>
+        <div class="meta"><span class="eta">ETA ${SEVPS.fmtEta(t.eta)}</span> &middot; ${SEVPS.fmtDistance(t.distance_remaining_m)} out
+          ${t.patient_deteriorating ? ' &middot; <span class="badge bad">deteriorating</span>' : ""}</div>
+        ${t.patient_notes ? `<div class="meta muted">${t.patient_notes}</div>` : ""}
+      </div>`).join("");
+
+    inbound.forEach((t) => {
+      const position = [t.latitude, t.longitude];
+      if (vehicleMarkers[t.vehicle]) vehicleMarkers[t.vehicle].setLatLng(position);
+      else vehicleMarkers[t.vehicle] = L.marker(position, {
+        icon: SEVPS.vehicleIcon(t.priority_level, t.vehicle_type),
+      }).bindPopup(`<b>${t.vehicle}</b><br>${t.emergency_category_display || ""}`).addTo(map);
+    });
+  }
+
+  function renderAlerts(alerts) {
+    const box = document.getElementById("alert-list");
+    if (!alerts || !alerts.length) {
+      box.innerHTML = '<div class="empty">No alerts.</div>';
+      return;
+    }
+    box.innerHTML = alerts.slice(0, 8).map((a) => `
+      <div class="trip ${a.is_acknowledged ? "l4" : "l2"}" data-alert="${a.id}">
+        <div class="head"><span class="ref">${a.vehicle_callsign || "ambulance"} &middot; ${a.category_display}</span>
+          <span class="badge ${a.is_acknowledged ? "ok" : "warn"}">${a.is_acknowledged ? "acknowledged" : "new"}</span></div>
+        <div class="meta">${a.message} &middot; ETA ${SEVPS.fmtEta(a.eta)}</div>
+        ${a.is_acknowledged ? "" : `<div class="btn-row"><button class="ghost ack" data-id="${a.id}">Acknowledge &amp; prepare</button></div>`}
+      </div>`).join("");
+
+    box.querySelectorAll(".ack").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await SEVPS.api(`/api/v1/hospitals/alerts/${btn.dataset.id}/acknowledge/`, {
+            method: "POST",
+            body: { acknowledged_by: "ED staff", preparation_notes: "Team and bay prepared" },
+          });
+          log("alert acknowledged", "ok");
+          refresh();
+        } catch (err) {
+          log("acknowledge failed (sign in as staff): " + err.message, "bad");
+        }
+      };
+    });
+  }
+
+  document.getElementById("btn-capacity").onclick = async () => {
+    try {
+      const capacity = await SEVPS.api(`/api/v1/hospitals/hospitals/${HOSPITAL_ID}/capacity/`, {
+        method: "PATCH",
+        body: {
+          emergency_beds_available: parseInt(document.getElementById("c-ed").value || 0, 10),
+          icu_beds_available: parseInt(document.getElementById("c-icu").value || 0, 10),
+          patients_waiting: parseInt(document.getElementById("c-wait").value || 0, 10),
+          doctors_on_duty: parseInt(document.getElementById("c-doc").value || 0, 10),
+        },
+      });
+      renderCapacity(capacity);
+      log("capacity published to the recommendation engine", "ok");
+    } catch (err) {
+      log("capacity update failed (sign in required): " + err.message, "bad");
+    }
+  };
+
+  document.getElementById("btn-diversion").onclick = async () => {
+    try {
+      const hospital = await SEVPS.api(`/api/v1/hospitals/hospitals/${HOSPITAL_ID}/diversion/`, {
+        method: "POST",
+        body: { is_on_diversion: !onDiversion, reason: onDiversion ? "" : "ED at capacity" },
+      });
+      onDiversion = hospital.is_on_diversion;
+      renderDiversion();
+      log(onDiversion ? "diversion declared" : "diversion lifted", "warn");
+    } catch (err) {
+      log("diversion toggle failed (sign in required): " + err.message, "bad");
+    }
+  };
+
+  new SEVPS.Socket(`/ws/hospital/${encodeURIComponent(CODE)}/`, {
+    snapshot: (data) => {
+      renderCapacity(data.capacity);
+      inbound = data.inbound || [];
+      renderInbound();
+      renderAlerts(data.alerts);
+      renderDiversion();
+      log("connected to hospital feed", "ok");
+    },
+    inbound_update: (t) => {
+      const index = inbound.findIndex((row) => row.trip_id === t.trip_id);
+      if (index >= 0) inbound[index] = t; else inbound.push(t);
+      renderInbound();
+    },
+    hospital_alert: (a) => { log(`pre-arrival alert: ${a.category_display}`, "warn"); refresh(); },
+    alert_acknowledged: () => refresh(),
+    capacity_updated: renderCapacity,
+    trip_stage: (t) => {
+      if (["arrived", "handover", "cancelled"].includes(t.stage)) {
+        inbound = inbound.filter((row) => row.trip_id !== t.trip_id);
+        if (vehicleMarkers[t.vehicle]) { map.removeLayer(vehicleMarkers[t.vehicle]); delete vehicleMarkers[t.vehicle]; }
+        log(`${t.reference}: ${t.stage}`, "ok");
+      }
+      renderInbound();
+    },
+  });
+
+  async function refresh() {
+    const [trips, alerts] = await Promise.all([
+      SEVPS.api(`/api/v1/hospitals/hospitals/${HOSPITAL_ID}/inbound/`),
+      SEVPS.api(`/api/v1/hospitals/alerts/?hospital=${encodeURIComponent(CODE)}`),
+    ]);
+    inbound = (trips.results || trips).map((t) => ({
+      trip_id: t.id, vehicle: t.vehicle_callsign, vehicle_type: t.vehicle_type,
+      latitude: t.vehicle_latitude, longitude: t.vehicle_longitude,
+      emergency_category: t.emergency_category, emergency_category_display: t.category_display,
+      priority_level: t.priority_level, stage: t.stage, stage_display: t.stage_display,
+      eta: t.eta, distance_remaining_m: t.distance_remaining_m,
+      patient_age: t.patient_age, patient_notes: t.patient_notes,
+      patient_deteriorating: t.patient_deteriorating,
+      route_status: t.active_route ? "on_route" : "no_route",
+    }));
+    renderInbound();
+    renderAlerts(alerts.results || alerts);
+  }
+
+  refresh();
+  // ETAs count down locally every second; the poll is the fallback for
+  // events raised outside the server process (see operations.html).
+  setInterval(renderInbound, 1000);
+  SEVPS.poll(refresh, 4000);
+})();
+</script>
+{% endblock %}

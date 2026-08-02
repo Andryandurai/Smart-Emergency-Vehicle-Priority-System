@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Hospitals - SEVPS{% endblock %}
+{% block nav_hosp %}active{% endblock %}
+{% block body_class %}{% endblock %}
+
+{% block content %}
+<div class="page scroll">
+  <div class="page-head">
+    <h1>Hospital network</h1>
+    <p>Open a hospital's Preparedness Dashboard to see inbound patients, ETAs and live capacity.</p>
+  </div>
+
+  <div class="grid-3">
+    {% for h in hospitals %}
+    <a class="card" href="/legacy/hospital/{{ h.code }}/" style="display:block">
+      <h3>{{ h.code }}{% if h.is_trauma_designated %} &middot; trauma centre{% endif %}</h3>
+      <div style="font-size:16px;font-weight:700">{{ h.name }}</div>
+      <div class="muted" style="font-size:12px">{{ h.address|default:h.city }}</div>
+      <div style="margin-top:8px">
+        {% if h.is_on_diversion %}
+          <span class="badge bad">On diversion</span>
+        {% else %}
+          <span class="badge ok">Accepting</span>
+        {% endif %}
+        <span class="badge l4">{{ h.capabilities.count }} facilities</span>
+      </div>
+    </a>
+    {% empty %}
+    <div class="card"><div class="empty">No hospitals registered. Run <code>python manage.py seed_demo</code>.</div></div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

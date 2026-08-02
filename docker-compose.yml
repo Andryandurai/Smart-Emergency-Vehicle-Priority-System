@@ -1,0 +1,108 @@
+# SEVPS local/pilot stack.
+#
+#   docker compose up -d db redis     # infrastructure only, app still on host
+#   docker compose up --build         # everything in containers
+#
+# `db` is postgis/postgis rather than plain postgres: the spatial migration
+# creates the extension, and an image without it fails at migrate time rather
+# than silently running without spatial indexes.
+#
+# Two application processes, matching how SEVPS actually runs: the ASGI server
+# (HTTP + WebSockets) and the maintenance worker (corridor safety sweep, CV,
+# board expiry, nightly rollups). Redis is what lets them share a channel
+# layer - with the in-memory layer, events raised by the worker never reach a
+# dashboard held open by the web process.
+
+name: sevps
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${SEVPS_DB_NAME:-sevps}
+      POSTGRES_USER: ${SEVPS_DB_USER:-sevps}
+      POSTGRES_PASSWORD: ${SEVPS_DB_PASSWORD:-sevps}
+      # Emergency dispatch writes constantly; a little WAL headroom avoids
+      # checkpoint stalls during a surge.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - shared_buffers=256MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${SEVPS_DB_PORT:-5432}:5432"
+    healthcheck:
+      # Checks the actual database, not just the port, so dependents do not
+      # start against a server that is still initialising.
+      test: ["CMD-SHELL", "pg_isready -U ${SEVPS_DB_USER:-sevps} -d ${SEVPS_DB_NAME:-sevps}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "${SEVPS_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             daphne -b 0.0.0.0 -p 8000 sevps.asgi:application"
+    environment: &app_env
+      SEVPS_DB_ENGINE: postgres
+      SEVPS_ENABLE_POSTGIS: "1"
+      SEVPS_DB_HOST: db
+      SEVPS_DB_NAME: ${SEVPS_DB_NAME:-sevps}
+      SEVPS_DB_USER: ${SEVPS_DB_USER:-sevps}
+      SEVPS_DB_PASSWORD: ${SEVPS_DB_PASSWORD:-sevps}
+      SEVPS_REDIS_URL: redis://redis:6379/0
+      SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:-dev-insecure-key-do-not-use-in-production}
+      SEVPS_DEBUG: ${SEVPS_DEBUG:-1}
+      SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    ports:
+      - "${SEVPS_WEB_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "manage.py", "sevps_worker"]
+    environment: *app_env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  static_files:
+  media_files:
