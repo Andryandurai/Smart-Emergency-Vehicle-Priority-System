@@ -11,6 +11,11 @@ import path from "node:path";
  * over plain http://localhost. Same-origin through the proxy, it just works,
  * and dev behaves like production instead of needing a parallel auth path.
  */
+// The E2E suite runs Django on its own port against its own database, so the
+// proxy target has to be configurable. Defaults to the normal dev server.
+const API_TARGET = process.env.SEVPS_API_TARGET ?? "http://127.0.0.1:8000";
+const WS_TARGET = API_TARGET.replace(/^http/, "ws");
+
 export default defineConfig(({ mode }) => ({
   // Production assets are served by Django from /static/, so the hashed URLs
   // baked into index.html must be prefixed to match. In dev Vite serves the
@@ -24,12 +29,16 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true },
-      "/ws": { target: "ws://127.0.0.1:8000", ws: true },
+      "/api": { target: API_TARGET, changeOrigin: true },
+      "/ws": { target: WS_TARGET, ws: true },
       // The Django admin and the legacy server-rendered screens stay reachable
       // during the migration.
-      "/admin": { target: "http://127.0.0.1:8000", changeOrigin: true },
-      "/static": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/admin": { target: API_TARGET, changeOrigin: true },
+      "/static": { target: API_TARGET, changeOrigin: true },
+      // The push service worker is served by Django at the root so its scope
+      // covers the whole site (see apps/dashboards/views.py). Proxying it in
+      // dev means one copy, and dev push behaves exactly like production.
+      "/sw.js": { target: API_TARGET, changeOrigin: true },
     },
   },
   build: {
@@ -44,6 +53,10 @@ export default defineConfig(({ mode }) => ({
           // Leaflet is large and changes rarely - splitting it keeps the app
           // chunk small enough to re-download on every deploy without cost.
           leaflet: ["leaflet", "react-leaflet"],
+          // Same reasoning for Recharts, and more so: only /analytics uses it,
+          // and that route is lazy, so a controller who never opens the
+          // analytics screen never downloads ~470 kB of charting code.
+          charts: ["recharts"],
           vendor: ["react", "react-dom", "react-router-dom", "zustand"],
         },
       },

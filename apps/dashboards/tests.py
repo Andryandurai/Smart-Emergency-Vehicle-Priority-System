@@ -6,16 +6,42 @@ real channel layer rather than by calling consumer methods directly.
 """
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.contrib.auth.models import Group, User
 from django.test import TransactionTestCase
 from django.utils import timezone
 
 from apps.core.realtime import broadcast_ops, driver_group, broadcast, hospital_group
+from apps.core.roles import Role
 from apps.fleet.models import EmergencyVehicle
 from apps.hospitals.models import Hospital, HospitalCapability, HospitalCapacity
 from sevps.asgi import application
 
 
-async def connect(path):
+@database_sync_to_async
+def token_for(user) -> str:
+    from apps.core.jwt import SEVPSTokenObtainPairSerializer
+
+    return str(SEVPSTokenObtainPairSerializer.get_token(user).access_token)
+
+
+@database_sync_to_async
+def make_role_user(username: str, *roles: str) -> User:
+    user = User.objects.create_user(username, password="pw")
+    for role in roles:
+        group, _ = Group.objects.get_or_create(name=role)
+        user.groups.add(group)
+    return user
+
+
+async def connect(path, user=None):
+    """Open a socket, authenticating as ``user`` when one is given.
+
+    Phase 5 gave every consumer a role policy, so the operational sockets are
+    no longer anonymous. These tests authenticate; the policy is not relaxed.
+    """
+    if user is not None:
+        token = await token_for(user)
+        path = f"{path}{'&' if '?' in path else '?'}token={token}"
     communicator = WebsocketCommunicator(application, path)
     connected, _ = await communicator.connect()
     return communicator, connected
@@ -24,7 +50,8 @@ async def connect(path):
 class OpsSocketTests(TransactionTestCase):
     async def test_connect_receives_a_snapshot(self):
         """A control room opening mid-incident must not wait for the next event."""
-        communicator, connected = await connect("/ws/ops/")
+        user = await make_role_user("ops_snap", Role.DISPATCHER)
+        communicator, connected = await connect("/ws/ops/", user)
         self.assertTrue(connected)
 
         message = await communicator.receive_json_from(timeout=5)
@@ -35,7 +62,8 @@ class OpsSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_broadcast_reaches_a_subscriber(self):
-        communicator, _ = await connect("/ws/ops/")
+        user = await make_role_user("ops_bcast", Role.DISPATCHER)
+        communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)  # snapshot
 
         await database_sync_to_async(broadcast_ops)("test_event", {"hello": "world"})
@@ -47,7 +75,8 @@ class OpsSocketTests(TransactionTestCase):
 
     async def test_ping_is_answered(self):
         """Application-level keepalive - idle sockets get dropped by proxies."""
-        communicator, _ = await connect("/ws/ops/")
+        user = await make_role_user("ops_ping", Role.DISPATCHER)
+        communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)
 
         await communicator.send_json_to({"type": "ping"})
@@ -56,7 +85,8 @@ class OpsSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_malformed_payload_is_rejected_not_fatal(self):
-        communicator, _ = await connect("/ws/ops/")
+        user = await make_role_user("ops_bad", Role.DISPATCHER)
+        communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)
 
         await communicator.send_to(text_data="{not json")
@@ -72,7 +102,8 @@ class VehicleSocketTests(TransactionTestCase):
         )
 
     async def test_known_vehicle_connects_and_gets_state(self):
-        communicator, connected = await connect("/ws/vehicle/AMB-WS1/")
+        crew = await make_role_user("veh_crew", Role.AMBULANCE)
+        communicator, connected = await connect("/ws/vehicle/AMB-WS1/", crew)
         self.assertTrue(connected)
 
         message = await communicator.receive_json_from(timeout=5)
@@ -82,14 +113,21 @@ class VehicleSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_unknown_vehicle_is_refused(self):
-        communicator = WebsocketCommunicator(application, "/ws/vehicle/NOT-A-VEHICLE/")
-        connected, _ = await communicator.connect()
+        crew = await make_role_user("veh_unknown", Role.AMBULANCE)
+        communicator, connected = await connect("/ws/vehicle/NOT-A-VEHICLE/", crew)
+        self.assertFalse(connected)
+        await communicator.disconnect()
+
+    async def test_anonymous_cannot_open_a_vehicle_socket(self):
+        """It accepts telemetry, which moves a vehicle and preempts signals."""
+        communicator, connected = await connect("/ws/vehicle/AMB-WS1/")
         self.assertFalse(connected)
         await communicator.disconnect()
 
     async def test_telemetry_over_the_socket_is_accepted(self):
         """A vehicle in poor coverage should not pay an HTTP handshake per fix."""
-        communicator, _ = await connect("/ws/vehicle/AMB-WS1/")
+        crew = await make_role_user("veh_tel", Role.AMBULANCE)
+        communicator, _ = await connect("/ws/vehicle/AMB-WS1/", crew)
         await communicator.receive_json_from(timeout=5)
 
         await communicator.send_json_to(
@@ -103,7 +141,8 @@ class VehicleSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_bad_telemetry_returns_an_error_not_a_crash(self):
-        communicator, _ = await connect("/ws/vehicle/AMB-WS1/")
+        crew = await make_role_user("veh_badtel", Role.AMBULANCE)
+        communicator, _ = await connect("/ws/vehicle/AMB-WS1/", crew)
         await communicator.receive_json_from(timeout=5)
 
         await communicator.send_json_to({"type": "telemetry", "latitude": "not-a-number"})
@@ -121,7 +160,8 @@ class HospitalSocketTests(TransactionTestCase):
         HospitalCapacity.objects.create(hospital=self.hospital)
 
     async def test_hospital_receives_its_own_feed(self):
-        communicator, connected = await connect("/ws/hospital/WSH/")
+        nurse = await make_role_user("hosp_feed", Role.HOSPITAL)
+        communicator, connected = await connect("/ws/hospital/WSH/", nurse)
         self.assertTrue(connected)
 
         message = await communicator.receive_json_from(timeout=5)
@@ -132,13 +172,14 @@ class HospitalSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_unknown_hospital_is_refused(self):
-        communicator = WebsocketCommunicator(application, "/ws/hospital/NOPE/")
-        connected, _ = await communicator.connect()
+        nurse = await make_role_user("hosp_unknown", Role.HOSPITAL)
+        communicator, connected = await connect("/ws/hospital/NOPE/", nurse)
         self.assertFalse(connected)
         await communicator.disconnect()
 
     async def test_hospital_only_receives_its_own_events(self):
-        communicator, _ = await connect("/ws/hospital/WSH/")
+        nurse = await make_role_user("hosp_scope", Role.HOSPITAL)
+        communicator, _ = await connect("/ws/hospital/WSH/", nurse)
         await communicator.receive_json_from(timeout=5)
 
         await database_sync_to_async(broadcast)(

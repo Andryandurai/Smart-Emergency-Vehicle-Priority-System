@@ -11,9 +11,12 @@ from channels.db import database_sync_to_async
 
 from apps.core.consumers import GroupConsumer
 from apps.core.geo import geohash_neighbours
+from apps.core.ws_policy import DRIVERS_POLICY
 
 
 class DriverAlertConsumer(GroupConsumer):
+    policy = DRIVERS_POLICY
+
     async def groups_for_scope(self):
         self.cells: set[str] = set()
         self.device_id: str | None = None

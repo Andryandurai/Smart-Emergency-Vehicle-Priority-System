@@ -1,0 +1,124 @@
+# Production overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Naming both files explicitly is what suppresses `docker-compose.override.yml`
+# and therefore all host port publishing. Only nginx binds a host port here;
+# Postgres, Redis and Daphne stay inside the compose network.
+#
+# Every difference from the base file exists because the pilot default would
+# be a real problem in production:
+#
+#   * DEBUG off, and required secrets use `${VAR:?message}` so the deploy
+#     fails with a readable error rather than silently booting on
+#     `dev-insecure-key-do-not-use-in-production`.
+#   * nginx terminates traffic; Daphne is not reachable directly.
+#   * Resource limits, so one runaway process cannot starve the worker that
+#     releases signal holds.
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${SEVPS_DB_PASSWORD:?set SEVPS_DB_PASSWORD in .env}
+    command:
+      - postgres
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      # Emergency telemetry is append-heavy and every row is superseded by the
+      # next GPS fix a second later, so trading a small window of durable
+      # writes for a large drop in fsync latency is right here. It would not
+      # be for a bank's ledger. Dispatch decisions themselves are recorded in
+      # ordinary transactions and are unaffected.
+      - -c
+      - synchronous_commit=off
+      - -c
+      - wal_compression=on
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  redis:
+    command:
+      - redis-server
+      - --appendonly
+      - "no"
+      - --save
+      - ""
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  migrate:
+    environment:
+      SEVPS_DEBUG: "0"
+      SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:?set SEVPS_SECRET_KEY in .env}
+      SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:?set SEVPS_ALLOWED_HOSTS in .env}
+
+  web:
+    environment:
+      SEVPS_DEBUG: "0"
+      SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:?set SEVPS_SECRET_KEY in .env}
+      SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:?set SEVPS_ALLOWED_HOSTS in .env}
+      SEVPS_CSRF_TRUSTED_ORIGINS: ${SEVPS_CSRF_TRUSTED_ORIGINS:-}
+      # TLS terminates at nginx or the load balancer, so Django must read
+      # X-Forwarded-Proto rather than assume the scheme it was handed.
+      SEVPS_BEHIND_TLS_PROXY: "1"
+      # Redirection is left to the edge. With Django also redirecting, a
+      # misconfigured forwarded header produces an infinite redirect loop that
+      # presents as an application outage.
+      SEVPS_SECURE_SSL_REDIRECT: ${SEVPS_SECURE_SSL_REDIRECT:-0}
+      SEVPS_VAPID_PRIVATE_KEY: ${SEVPS_VAPID_PRIVATE_KEY:?set SEVPS_VAPID_PRIVATE_KEY or push alerts will not deliver}
+      SEVPS_VAPID_SUBJECT: "${SEVPS_VAPID_SUBJECT:?set SEVPS_VAPID_SUBJECT to a contactable mailto or https URI}"
+    deploy:
+      # Horizontal. Every replica shares group state through Redis, so a
+      # dashboard connected to replica 2 still receives an event raised by a
+      # request served by replica 1.
+      replicas: ${SEVPS_WEB_REPLICAS:-2}
+      resources:
+        limits:
+          memory: 1G
+
+  worker:
+    environment:
+      SEVPS_DEBUG: "0"
+      SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:?set SEVPS_SECRET_KEY in .env}
+      SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:?set SEVPS_ALLOWED_HOSTS in .env}
+      SEVPS_VAPID_PRIVATE_KEY: ${SEVPS_VAPID_PRIVATE_KEY:-}
+      SEVPS_VAPID_SUBJECT: "${SEVPS_VAPID_SUBJECT:-mailto:ops@sevps.local}"
+    deploy:
+      # Still exactly one - see the base file.
+      replicas: 1
+      resources:
+        limits:
+          memory: 2G   # headroom for the CV pipeline when YOLO is enabled
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      # Read-only: the edge serves these, it does not produce them. The
+      # `migrate` service writes them during deploy.
+      - static_files:/srv/static:ro
+      - media_files:/srv/media:ro
+    ports:
+      - "${SEVPS_HTTP_PORT:-80}:80"
+    depends_on:
+      web:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/api/v1/health/live/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

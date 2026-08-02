@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { auth, service } from "@/api/endpoints";
 import type { RoleDescriptor, ServiceInfo } from "@/api/types";
 import { Badge, Card, Empty, ErrorNote } from "@/components/ui";
+import { NotificationSettings } from "@/components/NotificationSettings";
 import { useAuthStore } from "@/stores/authStore";
 
 export function SettingsPage() {
@@ -140,6 +141,8 @@ export function SettingsPage() {
           )}
         </Card>
       </div>
+
+      <NotificationSettings />
 
       <h2>Roles</h2>
       <Card>

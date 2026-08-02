@@ -6,7 +6,9 @@
 from django.core.management.base import BaseCommand
 
 from apps.network.models import CameraFeed
-from apps.network.vision import analyse_camera, cv_backend, ingest_camera_analysis
+from apps.network.cv import pipeline as cv_pipeline
+from apps.network.cv.backends import backend_name as cv_backend
+from apps.network.cv.pipeline import analyse_camera, ingest
 
 
 class Command(BaseCommand):
@@ -29,7 +31,7 @@ class Command(BaseCommand):
             except Exception as exc:
                 self.stderr.write(self.style.ERROR(f"{camera.name}: {exc}"))
                 continue
-            _, events = ingest_camera_analysis(camera, analysis)
+            _, events = ingest(camera, analysis)
             analysed += 1
             incidents += len(events)
             if options["verbose_output"]:

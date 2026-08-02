@@ -5,6 +5,7 @@ from channels.db import database_sync_to_async
 
 from apps.core.consumers import GroupConsumer
 from apps.core.realtime import GROUP_SIGNALS, vehicle_group
+from apps.core.ws_policy import SIGNALS_POLICY, VEHICLE_POLICY
 
 
 class VehicleConsumer(GroupConsumer):
@@ -14,6 +15,8 @@ class VehicleConsumer(GroupConsumer):
     telemetry pushed up the same socket so a vehicle in poor coverage does
     not pay HTTP handshake costs on every fix.
     """
+
+    policy = VEHICLE_POLICY
 
     async def groups_for_scope(self):
         callsign = self.scope["url_route"]["kwargs"]["callsign"]
@@ -81,12 +84,18 @@ class VehicleConsumer(GroupConsumer):
 
 
 class SignalControlConsumer(GroupConsumer):
-    """Bridge socket for physical signal controllers.
+    """Bridge socket for physical traffic signal controllers.
 
     A cabinet-side agent connects here, receives ``signal_command`` events for
-    its controllers and reports phase changes back.  This is how SEVPS reaches
+    its controllers and reports phase changes back. This is how SEVPS reaches
     hardware that cannot expose an inbound HTTP endpoint.
+
+    Restricted to traffic control: the ``phase_report`` handler writes
+    controller state, and an anonymous client was previously able to mark
+    controllers online or set their phase.
     """
+
+    policy = SIGNALS_POLICY
 
     async def groups_for_scope(self):
         return [GROUP_SIGNALS]

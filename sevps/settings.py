@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "apps.dispatch",    # Layer 3 & 6 - signal preemption, siren policy, trips
     "apps.alerts",      # Layer 4 - driver alert system
     "apps.analytics",   # dashboards 4.8 / 4.9
+    "apps.notify",      # push delivery, notification history, preferences
     "apps.dashboards",  # server-rendered operator UIs
 ]
 
@@ -136,9 +137,14 @@ def postgres_config() -> dict:
     }
 
 
+# Overridable so the Playwright suite can run against its own file rather than
+# whatever a developer has seeded by hand. An E2E run that mutates the working
+# database is one that either destroys real setup or passes because of it.
+SQLITE_PATH = env("SEVPS_SQLITE_PATH", "") or str(BASE_DIR / "sevps.sqlite3")
+
 SQLITE_CONFIG = {
     "ENGINE": "django.db.backends.sqlite3",
-    "NAME": BASE_DIR / "sevps.sqlite3",
+    "NAME": SQLITE_PATH,
     "OPTIONS": {"timeout": 20},
     # Django defaults the SQLite test database to shared-cache memory, which
     # cannot run in WAL mode. Concurrent writers there fail with "database
@@ -153,7 +159,7 @@ if DB_ENGINE in {"postgres", "postgresql"}:
     DATABASES = {"default": postgres_config()}
     # The SQLite file stays reachable as a named alias so a migration can read
     # the old database and write the new one in a single process.
-    if (BASE_DIR / "sevps.sqlite3").exists():
+    if Path(SQLITE_PATH).exists():
         DATABASES["sqlite"] = SQLITE_CONFIG
     if env_bool("SEVPS_USE_GEODJANGO", False):
         INSTALLED_APPS.insert(1, "django.contrib.gis")
@@ -203,10 +209,29 @@ LOGOUT_REDIRECT_URL = "/legacy/"
 # ---------------------------------------------------------------------------
 REDIS_URL = env("SEVPS_REDIS_URL", "").strip()
 if REDIS_URL:
+    try:
+        import channels_redis  # noqa: F401
+    except ImportError as exc:
+        # Falling back silently would be worse than failing: the deployment
+        # would look configured for multi-process fan-out while every event
+        # raised by the worker vanished before reaching a dashboard.
+        raise ImproperlyConfigured(
+            "SEVPS_REDIS_URL is set but channels-redis is not installed.\n"
+            "    pip install channels-redis==4.2.0\n"
+            "Unset SEVPS_REDIS_URL to run single-process with the in-memory layer."
+        ) from exc
+
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {"hosts": [REDIS_URL]},
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+                # A dashboard that falls behind must not stall the publisher;
+                # dropping frames is recoverable because clients detect the
+                # sequence gap and resync.
+                "capacity": env_int("SEVPS_CHANNEL_CAPACITY", 500),
+                "expiry": env_int("SEVPS_CHANNEL_EXPIRY", 10),
+            },
         }
     }
 else:
@@ -302,6 +327,21 @@ SEVPS = {
     "CV_MODE": env("SEVPS_CV_MODE", "simulated"),  # simulated | yolo
     "CV_MODEL": env("SEVPS_CV_MODEL", "yolov8n.pt"),
     "CV_CONFIDENCE": float(env("SEVPS_CV_CONFIDENCE", "0.35")),
+    # Machine learning (Phase 6). Models are optional: every estimator has a
+    # statistical baseline, and predictions report which produced them.
+    "MODEL_DIR": env("SEVPS_MODEL_DIR", "") or str(BASE_DIR / "models"),
+    # Notifications (Phase 9). Web Push is the primary transport and needs
+    # only a locally generated VAPID keypair - no vendor account. FCM is an
+    # optional adapter for native Android clients; see docs/NOTIFICATIONS.md.
+    "VAPID_PRIVATE_KEY": env("SEVPS_VAPID_PRIVATE_KEY", ""),
+    "VAPID_PUBLIC_KEY": env("SEVPS_VAPID_PUBLIC_KEY", ""),
+    "VAPID_KEY_PATH": env("SEVPS_VAPID_KEY_PATH", ""),
+    # RFC 8292 requires a contactable URI so a push service operator can reach
+    # the sender. Defaulted rather than left empty so a pilot install works
+    # after `generate_vapid_keys` alone.
+    "VAPID_SUBJECT": env("SEVPS_VAPID_SUBJECT", "mailto:ops@sevps.local"),
+    "FCM_CREDENTIALS": env("SEVPS_FCM_CREDENTIALS", ""),
+    "PUSH_DRIVER_ALERTS": env_bool("SEVPS_PUSH_DRIVER_ALERTS", True),
     # Spatial backend
     "POSTGIS_ENABLED": ENABLE_POSTGIS,
     "USE_GEODJANGO": env_bool("SEVPS_USE_GEODJANGO", False),
@@ -336,6 +376,14 @@ if not DEBUG:
     # since an over-eager HSTS header is painful to walk back.
     SECURE_HSTS_SECONDS = env_int("SEVPS_HSTS_SECONDS", 31536000)
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SEVPS_HSTS_SUBDOMAINS", True)
+    # Preload stays OFF by default, and `check --deploy` warns about that on
+    # purpose. Submitting a domain to the browser preload list is close to
+    # irreversible: removal takes months to propagate through browser
+    # releases, and until it does, every subdomain is unreachable over plain
+    # HTTP. For a municipal deployment that may still have a roadside display
+    # controller or a legacy signal bridge on HTTP, that is an outage of the
+    # thing this platform exists to run. Opt in once the estate is known to be
+    # fully TLS.
     SECURE_HSTS_PRELOAD = env_bool("SEVPS_HSTS_PRELOAD", False)
 
     if BEHIND_PROXY:

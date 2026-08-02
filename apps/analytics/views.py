@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from apps.analytics import exports, trends
 from apps.analytics.models import DailyMetric, Hotspot
 from apps.analytics.serializers import DailyMetricSerializer, HotspotSerializer
 from apps.analytics.services import (
@@ -105,3 +106,88 @@ class HotspotViewSet(viewsets.ReadOnlyModelViewSet):
         if self.request.query_params.get("kind"):
             qs = qs.filter(kind=self.request.query_params["kind"])
         return qs
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 - chart-shaped analytics and exports
+#
+# All authenticated. The aggregate summary endpoints above are already
+# role-gated and these carry the same class of information at finer grain -
+# daily emergency volume and per-hospital load is operational intelligence,
+# not public data, even though no individual trip is identifiable.
+# ---------------------------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def daily_trends(request):
+    """One point per day, plus the series catalogue the charts render from."""
+    return Response(
+        trends.daily_series(_days(request), request.query_params.get("city", "Chennai"))
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def trend_summary(request):
+    """Each metric's recent half against its previous half."""
+    return Response(
+        trends.trend(_days(request), request.query_params.get("city", "Chennai"))
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def demand_profile(request):
+    """When emergencies happen - hour of day and day of week, in local time."""
+    return Response(trends.demand_profile(_days(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def distribution(request):
+    """Emergency mix by category and priority level."""
+    return Response(trends.category_distribution(_days(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def corridor_outcomes(request):
+    """Preemptions per day, split by what actually happened."""
+    return Response(trends.corridor_outcomes(_days(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def response_distribution(request):
+    """Response-time histogram against the 8-minute target."""
+    return Response(trends.response_distribution(_days(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def hospital_load(request):
+    """Trips routed to each hospital, with the crew override rate."""
+    return Response(trends.hospital_load(_days(request)))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def export_catalogue(request):
+    """What can be exported, and the exact columns each file will contain."""
+    return Response({"datasets": exports.catalogue()})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedRole])
+def export_csv(request, dataset: str):
+    """Stream one dataset as CSV.
+
+    404 rather than an empty file for an unknown dataset: a report pipeline
+    that silently receives a zero-row CSV reports zero incidents, which is
+    worse than reporting an error.
+    """
+    if dataset not in exports.DATASETS:
+        return Response(
+            {"detail": "Unknown dataset.", "available": sorted(exports.DATASETS)},
+            status=404,
+        )
+    return exports.stream_csv(dataset, _days(request))

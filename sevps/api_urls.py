@@ -13,7 +13,7 @@ from apps.core.jwt import (
     SEVPSTokenRefreshView,
     SEVPSTokenVerifyView,
 )
-from apps.core.views import HealthView, ServiceInfoView
+from apps.core.views import HealthView, LivenessView, ReadinessView, ServiceInfoView
 
 #: Authentication. JWT is the target scheme; the legacy DRF token endpoint is
 #: retained so existing field devices keep working through the migration and
@@ -33,6 +33,10 @@ auth_patterns = [
 
 urlpatterns = [
     path("health/", HealthView.as_view(), name="api-health"),
+    # Split probes (Phase 11). Liveness must not check dependencies; see the
+    # views for why restarting on a database outage makes recovery worse.
+    path("health/live/", LivenessView.as_view(), name="api-health-live"),
+    path("health/ready/", ReadinessView.as_view(), name="api-health-ready"),
     path("info/", ServiceInfoView.as_view(), name="api-info"),
     path("auth/", include(auth_patterns)),
     path("fleet/", include("apps.fleet.urls")),
@@ -42,4 +46,5 @@ urlpatterns = [
     path("dispatch/", include("apps.dispatch.urls")),
     path("alerts/", include("apps.alerts.urls")),
     path("analytics/", include("apps.analytics.urls")),
+    path("notify/", include("apps.notify.urls")),
 ]

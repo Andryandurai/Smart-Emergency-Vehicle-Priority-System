@@ -172,17 +172,27 @@ class RBACMatrixTests(TestCase):
         }
 
     #: (label, method, url, allowed roles). "anon" means unauthenticated.
+    #:
+    #: `public` is deliberately absent from every operational row. A registered
+    #: road user is a subject of SEVPS, not an operator of it - the RoleSpec has
+    #: always read "no operational or clinical access" - and until Phase 12 the
+    #: permission layer did not enforce it. What a road user *does* get is the
+    #: anonymous Layer 4 surface: /alerts/nearby/, /alerts/boards/live/ and the
+    #: public GIS layers, all asserted in test_public_endpoints_remain_anonymous.
     MATRIX = [
         ("read trips", "get", "/api/v1/dispatch/trips/live/",
-         {"admin", "police", "dispatcher", "crew", "hospital", "public"}),
+         {"admin", "police", "dispatcher", "crew", "hospital"}),
         ("corridor tick", "post", "/api/v1/dispatch/corridor/tick/", {"admin", "police"}),
         ("rebuild graph", "post", "/api/v1/brain/network/rebuild/", {"admin", "police"}),
         ("recompute hotspots", "post", "/api/v1/analytics/accident-hotspots/recompute/",
          {"admin", "police"}),
         ("analytics summary", "get", "/api/v1/analytics/summary/",
-         {"admin", "police", "dispatcher", "crew", "hospital", "public"}),
+         {"admin", "police", "dispatcher", "crew", "hospital"}),
+        # The full alert table, carrying trip ids. The road-user surface is
+        # /alerts/nearby/, which takes a position and returns only what is
+        # approaching it.
         ("driver alert list", "get", "/api/v1/alerts/driver-alerts/",
-         {"admin", "police", "dispatcher", "crew", "hospital", "public"}),
+         {"admin", "police", "dispatcher", "crew", "hospital"}),
     ]
 
     def _call(self, method, url, user=None):

@@ -21,5 +21,19 @@ urlpatterns = [
         name="analytics-accident-hotspots-recompute",
     ),
     path("rollup/", views.rollup, name="analytics-rollup"),
+    # --- Phase 10: chart-shaped series, profiles and exports ---------------
+    path("trends/", views.daily_trends, name="analytics-trends"),
+    path("trends/summary/", views.trend_summary, name="analytics-trend-summary"),
+    path("demand/", views.demand_profile, name="analytics-demand"),
+    path("distribution/", views.distribution, name="analytics-distribution"),
+    path("corridor-outcomes/", views.corridor_outcomes, name="analytics-corridor-outcomes"),
+    path(
+        "response-distribution/",
+        views.response_distribution,
+        name="analytics-response-distribution",
+    ),
+    path("hospital-load/", views.hospital_load, name="analytics-hospital-load"),
+    path("export/", views.export_catalogue, name="analytics-export-catalogue"),
+    path("export/<str:dataset>.csv", views.export_csv, name="analytics-export"),
     path("", include(router.urls)),
 ]

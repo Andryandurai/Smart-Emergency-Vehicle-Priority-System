@@ -35,24 +35,40 @@ export function vehicleIcon(level: number, type: string): L.DivIcon {
   });
 }
 
+/** Fallback used before the basemap catalogue has loaded, and if it fails.
+ *  OpenStreetMap through CARTO needs no key: an emergency platform should not
+ *  depend on a commercial tile contract to draw a map. */
+const FALLBACK_BASEMAP = {
+  url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+  subdomains: "abcd",
+  max_zoom: 20,
+};
+
 export function MapCanvas({
   centre = DEFAULT_CENTRE,
   zoom = DEFAULT_ZOOM,
   children,
   className = "map",
+  basemap,
 }: {
   centre?: [number, number];
   zoom?: number;
   children?: ReactNode;
   className?: string;
+  basemap?: { url: string; attribution: string; subdomains?: string; max_zoom: number } | null;
 }) {
+  const tiles = basemap ?? FALLBACK_BASEMAP;
   return (
     <MapContainer center={centre} zoom={zoom} className={className} preferCanvas>
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        attribution="&copy; OpenStreetMap contributors &copy; CARTO"
-        subdomains="abcd"
-        maxZoom={20}
+        // Keyed on the URL so switching provider replaces the layer rather
+        // than mutating it - Leaflet caches tiles per layer instance.
+        key={tiles.url}
+        url={tiles.url}
+        attribution={tiles.attribution}
+        {...(tiles.subdomains ? { subdomains: tiles.subdomains } : {})}
+        maxZoom={tiles.max_zoom}
       />
       {children}
     </MapContainer>

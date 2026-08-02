@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { NotificationCentre } from "@/components/NotificationCentre";
 import { useAuthStore } from "@/stores/authStore";
 
 interface NavItem {
@@ -58,6 +59,9 @@ export function AppShell() {
         </nav>
 
         <div className="whoami">
+          {/* Only for signed-in users: the inbox is role-scoped and 401s
+              otherwise. Road users get their alerts through /driver. */}
+          <NotificationCentre enabled={Boolean(user)} />
           {user ? (
             <>
               <span className="who">{user.username}</span>

@@ -307,3 +307,222 @@ h2 { font-size: 15px; margin: 22px 0 10px; }
 /* Leaflet renders into a positioned container; the split panes need to be a
    containing block for the absolutely-positioned legend. */
 .split, .split.wide, .split.right { position: relative; }
+
+.conn[data-state="unauthorised"] .dot,
+.conn[data-state="forbidden"] .dot { background: var(--l2); }
+.conn[data-state="connecting"] .dot { background: var(--warn); }
+.conn .badge { margin-left: 6px; }
+
+/* ------------------------------------------------------- GIS layer control */
+.layer-control { position: absolute; top: 12px; right: 12px; z-index: 900; }
+.layer-toggle {
+  width: auto; padding: 7px 13px; font-size: 12.5px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+.layer-panel {
+  margin-top: 6px; width: 260px; max-height: 68vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.5);
+}
+.layer-panel h4 {
+  margin: 10px 0 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .8px; color: var(--muted);
+}
+.layer-panel h4:first-child { margin-top: 0; }
+.layer-panel select { margin-bottom: 4px; }
+.layer-row {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 5px;
+  font-size: 12.5px; text-transform: none; letter-spacing: 0;
+  color: var(--text); cursor: pointer;
+}
+.layer-row input { width: auto; }
+.layer-row.locked { opacity: .5; cursor: not-allowed; }
+.layer-title { flex: 1; }
+.layer-count {
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.layer-note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+/* ---------------------------------------------------------------------------
+   Notification centre (Phase 9)
+   The bell sits in the top bar and its panel overlays the map, so it needs a
+   z-index above Leaflet's controls (which top out at 1000).
+   --------------------------------------------------------------------------- */
+.notif { position: relative; margin-right: 10px; }
+
+.notif-bell {
+  position: relative;
+  background: transparent;
+  border: 1px solid var(--line, #26313d);
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 5px 9px;
+}
+.notif-bell:hover { border-color: #3d5165; }
+/* An unread critical alert must be visible without opening anything. */
+.notif-bell.critical { border-color: #ff4d4f; animation: notif-pulse 2s ease-in-out infinite; }
+@keyframes notif-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(255, 77, 79, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notif-bell.critical { animation: none; border-width: 2px; }
+}
+
+.notif-badge {
+  position: absolute;
+  top: -6px; right: -6px;
+  background: #ff4d4f;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 16px;
+  padding: 3px 4px;
+  text-align: center;
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel, #131a21);
+  border: 1px solid var(--line, #26313d);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 1200;
+  overflow: hidden;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line, #26313d);
+  font-size: 12.5px;
+}
+
+.notif-push {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  background: rgba(77, 163, 255, 0.08);
+  border-bottom: 1px solid var(--line, #26313d);
+}
+.notif-push.ok { background: rgba(46, 204, 113, 0.08); }
+.notif-push.warn { background: rgba(255, 159, 67, 0.1); }
+
+.notif-list { max-height: 52vh; overflow-y: auto; }
+
+.notif-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line, #26313d);
+  border-left: 3px solid transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 9px 12px;
+}
+.notif-item:hover { background: rgba(255, 255, 255, 0.03); }
+/* Read notifications fade rather than disappear - "what did I already see"
+   is part of the answer to "what happened". */
+.notif-item.read { opacity: 0.55; }
+.notif-item.bad { border-left-color: #ff4d4f; }
+.notif-item.warn { border-left-color: #ff9f43; }
+.notif-item.ok { border-left-color: #2ecc71; }
+
+.notif-item-head { display: flex; justify-content: space-between; gap: 8px; }
+.notif-title { font-size: 12.5px; font-weight: 600; }
+.notif-time { font-size: 10.5px; opacity: 0.65; white-space: nowrap; }
+.notif-body { font-size: 11.5px; margin-top: 3px; opacity: 0.85; }
+.notif-meta { font-size: 10.5px; margin-top: 4px; opacity: 0.6; }
+.notif-empty, .notif-error { font-size: 11.5px; opacity: 0.7; padding: 16px 12px; text-align: center; }
+.notif-error { color: #ff9f43; }
+
+/* Preferences on /settings */
+.pref-note { font-size: 11.5px; opacity: 0.75; margin-bottom: 10px; }
+.pref-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px; }
+.pref-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.row-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* ---------------------------------------------------------------------------
+   Charts (Phase 10)
+   --------------------------------------------------------------------------- */
+.chart { width: 100%; }
+.chart-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.chart-title { font-size: 12.5px; font-weight: 600; }
+.chart-sub { font-size: 11px; opacity: 0.65; }
+.chart-empty {
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--line, #26313d); border-radius: 6px;
+  font-size: 11.5px; opacity: 0.6;
+}
+/* Recharts draws its own SVG text; keep it from inheriting a colour that
+   disappears against the dark panel. */
+.recharts-text { fill: #7f8c9b; }
+.recharts-cartesian-axis-line, .recharts-cartesian-axis-tick-line { stroke: #26313d; }
+
+/* Series picker */
+.series-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.series-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; border: 1px solid var(--line, #26313d); border-radius: 14px;
+  color: inherit; cursor: pointer; font: inherit; font-size: 11px;
+  opacity: 0.55; padding: 4px 10px;
+}
+.series-chip:hover { opacity: 0.85; }
+.series-chip.on { opacity: 1; background: rgba(255, 255, 255, 0.05); }
+/* Selected but plotted on no axis, because its unit differs from the chart's. */
+.series-chip.muted-chip { opacity: 0.45; border-style: dashed; }
+.chip-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* KPI trend tiles */
+.trend-tiles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px; margin: 10px 0 18px;
+}
+.trend-tile {
+  background: var(--panel, #131a21); border: 1px solid var(--line, #26313d);
+  border-left: 3px solid #7f8c9b; border-radius: 6px; padding: 10px 12px;
+}
+.trend-tile.good { border-left-color: #2ecc71; }
+.trend-tile.bad { border-left-color: #ff4d4f; }
+.trend-tile.flat { border-left-color: #7f8c9b; }
+.trend-label { font-size: 11px; opacity: 0.7; }
+.trend-value { font-size: 20px; font-weight: 600; margin: 3px 0; }
+.trend-change { font-size: 10.5px; opacity: 0.8; }
+.trend-tile.good .trend-arrow { color: #2ecc71; }
+.trend-tile.bad .trend-arrow { color: #ff4d4f; }
+.trend-arrow { margin-right: 4px; }
+
+/* Exports */
+.export-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.export-card {
+  display: flex; flex-direction: column; gap: 4px;
+  /* A <button>, not an <a>: the download needs an auth header, so it cannot
+     be a browser navigation. These reset the button defaults. */
+  cursor: pointer; font: inherit; text-align: left; width: 100%;
+  background: rgba(255, 255, 255, 0.02); border: 1px solid var(--line, #26313d);
+  border-radius: 6px; color: inherit; padding: 10px 12px; text-decoration: none;
+}
+.export-card:hover { border-color: #4da3ff; background: rgba(77, 163, 255, 0.06); }
+.export-title { font-size: 12px; font-weight: 600; }
+.export-desc { font-size: 10.5px; opacity: 0.7; }
+.export-cols { font-size: 9.5px; opacity: 0.45; overflow-wrap: anywhere; }
+
+.small { font-size: 11px; }

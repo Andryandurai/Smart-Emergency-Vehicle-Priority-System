@@ -93,4 +93,6 @@ class AccessPolicyView(APIView):
     permission_classes = [IsAdministrator]
 
     def get(self, request):
-        return Response(policy_summary())
+        from apps.core.ws_policy import policy_summary as ws_policy_summary
+
+        return Response({"rest": policy_summary(), "websockets": ws_policy_summary()})

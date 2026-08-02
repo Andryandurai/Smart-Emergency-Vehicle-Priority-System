@@ -8,9 +8,12 @@ from channels.db import database_sync_to_async
 
 from apps.core.consumers import GroupConsumer
 from apps.core.realtime import GROUP_OPS
+from apps.core.ws_policy import OPS_POLICY
 
 
 class OpsConsumer(GroupConsumer):
+    policy = OPS_POLICY
+
     async def groups_for_scope(self):
         return [GROUP_OPS]
 

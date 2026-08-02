@@ -27,12 +27,14 @@ psycopg[binary]==3.2.1
 # channels-redis==4.2.0
 
 # ---------------------------------------------------------------------------
-# Optional - Machine Learning congestion / ETA models
-#   Without these SEVPS falls back to the built-in statistical predictor.
+# Machine learning + explainability (Phase 6)
+#   Optional: every estimator has a statistical baseline and predictions report
+#   which produced them. Install to train models and get SHAP attributions.
 # ---------------------------------------------------------------------------
-# scikit-learn==1.5.1
-# numpy==2.0.1
-# joblib==1.4.2
+scikit-learn==1.5.2
+numpy==2.1.3
+joblib==1.4.2
+shap==0.46.0
 
 # ---------------------------------------------------------------------------
 # Optional - Computer Vision traffic analysis (Layer 2 / feature 4.5)
@@ -46,3 +48,39 @@ psycopg[binary]==3.2.1
 # ---------------------------------------------------------------------------
 # celery==5.4.0
 # redis==5.0.8
+
+# ---------------------------------------------------------------------------
+# Notifications - Web Push over VAPID (Phase 9)
+#   The primary push transport. No vendor account: `manage.py
+#   generate_vapid_keys` is the entire setup. Without this the platform still
+#   notifies over WebSocket and stores full notification history; only
+#   push-when-the-tab-is-closed is unavailable.
+# ---------------------------------------------------------------------------
+pywebpush==2.3.0
+
+# ---------------------------------------------------------------------------
+# Optional - Firebase Cloud Messaging adapter
+#   Only needed for native Android clients holding an FCM registration token
+#   rather than a W3C push subscription. Browsers do not need this; see
+#   docs/NOTIFICATIONS.md for why FCM is the adapter and not the default.
+# ---------------------------------------------------------------------------
+# firebase-admin==6.5.0
+
+# ---------------------------------------------------------------------------
+# Deployment artifact checks (Phase 11)
+#   apps/core/tests_deployment.py parses the compose files so a published
+#   database port or a missing WebSocket upgrade header fails CI rather than
+#   being discovered during a deploy. The tests skip cleanly without this.
+# ---------------------------------------------------------------------------
+PyYAML==6.0.2
+
+# ---------------------------------------------------------------------------
+# Test runner (Phase 12)
+#   Pytest is the runner, not a rewrite: the existing django.test.TestCase
+#   classes are collected and run unchanged, and `manage.py test` still works.
+#   What pytest adds is parametrisation (the RBAC matrix), composable fixtures
+#   and markers. See docs/TESTING.md.
+# ---------------------------------------------------------------------------
+pytest==9.1.1
+pytest-django==4.12.0
+pytest-cov==7.1.0

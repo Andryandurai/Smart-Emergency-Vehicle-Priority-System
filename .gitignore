@@ -52,3 +52,14 @@ htmlcov/
 
 # Docker
 docker-compose.override.yml
+
+# Phase 12 test artefacts
+e2e.sqlite3
+e2e.sqlite3-*
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/

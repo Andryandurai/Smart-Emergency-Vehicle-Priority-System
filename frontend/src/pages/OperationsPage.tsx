@@ -1,18 +1,20 @@
 /** Emergency Operations Dashboard - feature 4.11. */
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
-import { network } from "@/api/endpoints";
-import type { DriverAlert, SegmentCollection, Trip, VehiclePayload } from "@/api/types";
+import type { DriverAlert, Trip, VehiclePayload } from "@/api/types";
 import {
   AlertCircle,
   FollowVehicle,
   MapCanvas,
   MapLegend,
-  RouteLine,
-  SegmentsLayer,
   VehicleMarkers,
-  Dot,
 } from "@/components/MapCanvas";
+import { GisLayer } from "@/components/map/GisLayer";
+import { LayerControl } from "@/components/map/LayerControl";
+import { useGisLayers } from "@/hooks/useGisLayers";
+import { useAuthStore } from "@/stores/authStore";
+import { useNotifyStore } from "@/stores/notifyStore";
 import {
   Badge,
   Card,
@@ -28,6 +30,7 @@ import {
 } from "@/components/ui";
 import { usePolling } from "@/hooks/usePolling";
 import { useSocket } from "@/hooks/useSocket";
+import type { EtaUpdate } from "@/stores/opsStore";
 import {
   selectActiveHolds,
   selectOpenPreemptions,
@@ -38,12 +41,19 @@ import {
 
 export function OperationsPage() {
   const store = useOpsStore();
-  const trips = useOpsStore(selectTripList);
-  const vehicles = useOpsStore(selectVehicleList);
-  const openPreemptions = useOpsStore(selectOpenPreemptions);
-  const activeHolds = useOpsStore(selectActiveHolds);
+  // useShallow is required, not stylistic: these selectors build a new array
+  // per call and would otherwise re-render forever. See the note in opsStore.
+  const trips = useOpsStore(useShallow(selectTripList));
+  const vehicles = useOpsStore(useShallow(selectVehicleList));
+  const openPreemptions = useOpsStore(useShallow(selectOpenPreemptions));
+  const activeHolds = useOpsStore(selectActiveHolds);   // a number - safe
 
-  const [segments, setSegments] = useState<SegmentCollection | null>(null);
+  // Layers, their data and the operator's on/off choices all live in one hook
+  // so a layer added server-side needs no change here.
+  const gis = useGisLayers();
+  const authenticated = useAuthStore((state) => state.status === "authenticated");
+  const [basemapId, setBasemapId] = useState<string>("");
+
   // ETAs are relative, so the list re-renders once a second even when no data
   // has changed. Cheap, and it keeps the countdown honest.
   const [, setTick] = useState(0);
@@ -53,15 +63,14 @@ export function OperationsPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Adopt the server's default basemap once the catalogue arrives, unless the
+  // operator has already picked one.
   useEffect(() => {
-    const controller = new AbortController();
-    network
-      .segments(4000, controller.signal)
-      .then(setSegments)
-      .catch(() => store.addLog("road network not loaded - run seed_demo", "warn"));
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (gis.basemaps && !basemapId) setBasemapId(gis.basemaps.default);
+  }, [gis.basemaps, basemapId]);
+
+  const basemap =
+    gis.basemaps?.providers.find((provider) => provider.id === basemapId) ?? null;
 
   // Polling is the correctness floor; the socket below is the latency win.
   usePolling((signal) => store.refreshVehicles(signal), 2000);
@@ -69,7 +78,13 @@ export function OperationsPage() {
   usePolling((signal) => store.refreshPreemptions(signal), 4000);
   usePolling((signal) => store.refreshEvents(signal), 10000);
 
-  const { status, viewer } = useSocket("/ws/ops/", {
+  // A sequence gap means this client missed frames; refetch rather than
+  // render a board that quietly stopped updating.
+  const { status, viewer, missedFrames } = useSocket("/ws/ops/", {
+    onGap: () => {
+      store.addLog("missed live frames - resyncing", "warn");
+      void store.refreshAll();
+    },
     handlers: {
       snapshot: (data) => store.applySnapshot(data as never),
       vehicle_position: (data) => store.upsertVehicle(data as VehiclePayload),
@@ -113,6 +128,27 @@ export function OperationsPage() {
         void store.refreshPreemptions();
       },
       driver_alerts: (data) => store.pushAlerts((data as { alerts: DriverAlert[] }).alerts ?? []),
+      eta_update: (data) => {
+        const update = data as EtaUpdate;
+        store.applyEta(update);
+        if (update.is_stalled) {
+          store.addLog(`trip ${update.trip_id} is stationary`, "warn");
+        }
+      },
+      traffic_update: () => { /* segments repaint on the next network poll */ },
+      fleet_health: (data) => {
+        const stale = (data as { stale: { callsign: string }[] }).stale ?? [];
+        if (stale.length) {
+          store.addLog(`${stale.map((v) => v.callsign).join(", ")} silent`, "bad");
+        }
+      },
+      notification: (data) => {
+        const note = data as { title: string; severity: string };
+        store.addLog(note.title, note.severity === "critical" ? "bad" : "warn");
+        // Also feed the notification centre, so a notification that arrived
+        // while this tab was open is not missing from the bell.
+        useNotifyStore.getState().ingest(data as never);
+      },
       road_event_created: () => void store.refreshEvents(),
       road_event_cleared: () => void store.refreshEvents(),
     },
@@ -127,7 +163,7 @@ export function OperationsPage() {
     <div className="split wide">
       <aside className="sidebar">
         <div className="sidebar-head">
-          <ConnectionDot status={status} />
+          <ConnectionDot status={status} missedFrames={missedFrames} />
           {viewer && !viewer.authenticated && (
             <Badge tone="warn">socket anonymous</Badge>
           )}
@@ -215,26 +251,24 @@ export function OperationsPage() {
         </Card>
       </aside>
 
-      <MapCanvas>
-        <SegmentsLayer collection={segments} />
-        <VehicleMarkers vehicles={vehicles} onSelect={store.follow} />
-        {trips.map((trip) =>
-          trip.active_route ? (
-            <RouteLine key={trip.id} geometry={trip.active_route.geometry} />
+      <MapCanvas basemap={basemap}>
+        {/* Declarative GIS layers: roads, hospitals, signals, closures,
+            routes, boards, cameras and the three heat surfaces. */}
+        {gis.catalogue.map((layer) =>
+          gis.isActive(layer.name) ? (
+            <GisLayer
+              key={layer.name}
+              layer={layer.name}
+              collection={gis.data[layer.name] ?? null}
+              heatmap={layer.is_heatmap}
+            />
           ) : null,
         )}
-        {openPreemptions.map((preemption) => (
-          <Dot
-            key={preemption.id}
-            position={[preemption.latitude, preemption.longitude]}
-            colour={preemption.state === "active" ? "#2ecc71" : "#ffd166"}
-            radius={preemption.state === "active" ? 8 : 5}
-          >
-            <b>{preemption.controller_id}</b>
-            <br />
-            {preemption.intersection} · {preemption.state}
-          </Dot>
-        ))}
+
+        {/* Vehicles stay socket-driven rather than polled - they move every
+            second and carry the priority styling the corridor depends on. */}
+        <VehicleMarkers vehicles={vehicles} onSelect={store.follow} />
+
         {store.alerts.map((alert) => (
           <AlertCircle
             key={alert.uuid}
@@ -247,6 +281,17 @@ export function OperationsPage() {
           position={followed ? [followed.latitude, followed.longitude] : null}
         />
       </MapCanvas>
+
+      <LayerControl
+        catalogue={gis.catalogue}
+        basemaps={gis.basemaps}
+        data={gis.data}
+        isActive={gis.isActive}
+        onToggle={gis.toggle}
+        basemapId={basemapId}
+        onBasemap={setBasemapId}
+        authenticated={authenticated}
+      />
       <MapLegend />
     </div>
   );

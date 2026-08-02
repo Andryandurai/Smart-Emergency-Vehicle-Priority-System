@@ -24,6 +24,11 @@ from dataclasses import dataclass
 #: all read-only and none exposes patient-identifying information.
 PUBLIC_READ_ENDPOINTS: dict[str, str] = {
     "api-health": "Load balancer and uptime probes must not need credentials.",
+    "api-health-live": "Container liveness probe; reports process state only, no data.",
+    "api-health-ready": (
+        "Load balancer readiness probe. Reports whether dependencies are "
+        "reachable - names of subsystems, never their contents."
+    ),
     "api-info": "Capability advertisement; used by clients to detect backends.",
     "api-token": "Legacy DRF token issuance - credentials are the payload.",
     "jwt-create": "Token issuance - credentials are the payload.",
@@ -45,6 +50,20 @@ PUBLIC_READ_ENDPOINTS: dict[str, str] = {
         "geohash cell only, never linked to an identity."
     ),
     "displayboard-live": "Roadside VMS signs and city displays poll without credentials.",
+    "notify-vapid-key": (
+        "The VAPID *public* key. A browser must have it before it can even "
+        "show the notification permission prompt; it authenticates the server "
+        "to the push service and grants the holder nothing."
+    ),
+    "notify-subscribe": (
+        "A road user's phone registers for approaching-ambulance warnings "
+        "without an account, matching alerts-nearby. Anonymous subscriptions "
+        "store no identity and are targeted only by coarse geohash cell."
+    ),
+    "notify-unsubscribe": (
+        "Turning off notifications must never require a login. The endpoint "
+        "URL is itself the capability, so presenting it proves possession."
+    ),
     # --- Public network state ---------------------------------------------
     "segment-geojson": "Base road network geometry; equivalent to public OSM data.",
     "brain-route": "Public route planning; no operational state is disclosed.",
@@ -57,6 +76,20 @@ PUBLIC_READ_ENDPOINTS: dict[str, str] = {
     ),
     "hospital-rule-lookup": "Clinical rule catalogue; published reference data.",
     "dispatch-priority-profiles": "Static Layer 6 documentation of the four levels.",
+    "ml-models": "Which models are trained; no data, only availability.",
+    "cv-status": "CV backend and camera-estate counters; no imagery, no detections.",
+    "gis-catalogue": "Layer catalogue and tile providers; names and URLs only.",
+    "gis-basemaps": "Tile provider list. Any configured Mapbox token is public by nature - it is sent to the browser to fetch tiles.",
+    "gis-layer": (
+        "Per-layer permissions are resolved in the view: public infrastructure "
+        "(roads, hospitals, signals, closures) is open; live vehicles and routes "
+        "require a signed-in role."
+    ),
+    "ml-congestion": "Aggregate road forecast; same exposure as the segment GeoJSON.",
+    "ml-hospital": (
+        "Explained hospital recommendation. Same inputs and exposure as "
+        "/hospitals/recommend/ - a location and a category, never a patient record."
+    ),
 }
 
 #: URL names whose *list/read* exposes patient-identifying data and therefore
@@ -145,7 +178,8 @@ def audit_api_permissions() -> list[EndpointReport]:
                     permissions=classes,
                     declared=declared,
                     public=any(
-                        c in {"AllowAny", "PublicRead"} for c in classes
+                        c in {"AllowAny", "PublicRead", "PublicDeviceRegistration"}
+                        for c in classes
                     ),
                 )
             )

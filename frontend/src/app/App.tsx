@@ -1,9 +1,8 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/app/AppShell";
 import { RequireAuth } from "@/app/RequireAuth";
-import { AnalyticsPage } from "@/pages/AnalyticsPage";
 import { BoardsPage } from "@/pages/BoardsPage";
 import { DriverPage } from "@/pages/DriverPage";
 import { HospitalListPage } from "@/pages/HospitalListPage";
@@ -15,6 +14,15 @@ import { ParamedicPage } from "@/pages/ParamedicPage";
 import { ParamedicSelectPage } from "@/pages/ParamedicSelectPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { useAuthStore } from "@/stores/authStore";
+
+/**
+ * Analytics is the only screen that needs Recharts (~470 kB). Loading it
+ * eagerly would put charting code in front of every operator opening the
+ * live map during an incident - the screen where load time actually matters.
+ */
+const AnalyticsPage = lazy(() =>
+  import("@/pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })),
+);
 
 export function App() {
   const bootstrap = useAuthStore((state) => state.bootstrap);
@@ -52,7 +60,14 @@ export function App() {
             <Route path="/hospital/:code" element={<HospitalPage />} />
             <Route path="/paramedic" element={<ParamedicSelectPage />} />
             <Route path="/paramedic/:callsign" element={<ParamedicPage />} />
-            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route
+              path="/analytics"
+              element={
+                <Suspense fallback={<div className="boot-sub">Loading charts…</div>}>
+                  <AnalyticsPage />
+                </Suspense>
+              }
+            />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
 

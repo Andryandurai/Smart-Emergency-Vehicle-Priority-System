@@ -132,11 +132,37 @@ export function RedactionNote() {
   );
 }
 
-export function ConnectionDot({ status }: { status: "connecting" | "open" | "closed" }) {
+export type SocketState = "connecting" | "open" | "closed" | "unauthorised" | "forbidden";
+
+const SOCKET_LABEL: Record<SocketState, string> = {
+  connecting: "connecting",
+  open: "live",
+  closed: "reconnecting",
+  unauthorised: "sign in required",
+  forbidden: "not permitted",
+};
+
+/**
+ * A refusal is not a disconnection. Showing "reconnecting" when the server has
+ * decided this role may never open the socket would have an operator waiting
+ * for a recovery that is never coming.
+ */
+export function ConnectionDot({
+  status,
+  missedFrames = 0,
+}: {
+  status: SocketState;
+  missedFrames?: number;
+}) {
   return (
     <div className="conn" data-state={status}>
       <span className="dot" />
-      <span className="label">{status}</span>
+      <span className="label">{SOCKET_LABEL[status]}</span>
+      {missedFrames > 0 && (
+        <span className="badge warn" title={`${missedFrames} frames missed`}>
+          {missedFrames} dropped
+        </span>
+      )}
     </div>
   );
 }

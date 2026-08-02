@@ -1,5 +1,12 @@
 .git
 .gitignore
+
+# The frontend is built inside the image by the Node stage. Copying these in
+# would add hundreds of megabytes and, worse, could shadow the freshly built
+# dist with whatever a developer last built on their laptop.
+frontend/node_modules/
+frontend/dist/
+node_modules/
 __pycache__
 *.py[cod]
 .venv

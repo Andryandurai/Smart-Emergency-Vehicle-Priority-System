@@ -99,6 +99,11 @@ def assign_hospital(
     chosen = hospital or recommendation.recommended
     if chosen is None:
         log.error("No hospital could be selected for trip %s", trip.reference)
+        from apps.core import notifications
+
+        notifications.no_hospital_available(
+            trip, recommendation.relaxation_note or "No hospital in range can accept."
+        )
         return {"error": "no suitable hospital found", "recommendation": recommendation.as_dict()}
 
     HospitalRecommendationLog.objects.create(
@@ -394,6 +399,12 @@ def notify_hospital(trip, *, message: str = "", live_update: bool = False) -> di
     alert_payload = HospitalAlertSerializer(alert).data
     broadcast(hospital_group(hospital.code), "hospital_alert", alert_payload)
     broadcast_ops("hospital_alert", alert_payload)
+
+    # A durable notification as well as the state event: a hospital screen
+    # showing another patient still needs to know this one is coming.
+    from apps.core import notifications
+
+    notifications.hospital_prepare(trip, hospital)
     return alert_payload
 
 

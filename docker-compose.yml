@@ -1,19 +1,56 @@
-# SEVPS local/pilot stack.
+# SEVPS local / pilot stack.
 #
-#   docker compose up -d db redis     # infrastructure only, app still on host
-#   docker compose up --build         # everything in containers
+#   docker compose up --build
+#       local: the auto-loaded override publishes ports to the host
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#       production: nginx at the edge, DEBUG off, nothing else exposed
+#
+# **This file publishes no ports.** Host port mappings live in
+# `docker-compose.override.yml`, which Compose loads automatically for local
+# work and never loads when you name files explicitly. That ordering is
+# deliberate: forgetting an overlay then fails *closed* - the stack comes up
+# unreachable - rather than open, with an emergency service's database
+# listening on a public interface because a `-f` was omitted.
 #
 # `db` is postgis/postgis rather than plain postgres: the spatial migration
 # creates the extension, and an image without it fails at migrate time rather
 # than silently running without spatial indexes.
 #
-# Two application processes, matching how SEVPS actually runs: the ASGI server
-# (HTTP + WebSockets) and the maintenance worker (corridor safety sweep, CV,
-# board expiry, nightly rollups). Redis is what lets them share a channel
-# layer - with the in-memory layer, events raised by the worker never reach a
-# dashboard held open by the web process.
+# Three application roles, matching how SEVPS actually runs:
+#
+#   migrate - one-shot. Owns schema changes, so exactly one process does.
+#   web     - ASGI: HTTP and WebSockets.
+#   worker  - corridor safety sweep, CV pipeline, board expiry, rollups.
+#
+# Redis is what lets web and worker share a channel layer. With the in-memory
+# layer an event raised by the worker never reaches a dashboard held open by
+# the web process - the console appears to work and is simply always stale.
 
 name: sevps
+
+x-app-env: &app_env
+  SEVPS_DB_ENGINE: postgres
+  SEVPS_ENABLE_POSTGIS: "1"
+  SEVPS_DB_HOST: db
+  SEVPS_DB_NAME: ${SEVPS_DB_NAME:-sevps}
+  SEVPS_DB_USER: ${SEVPS_DB_USER:-sevps}
+  SEVPS_DB_PASSWORD: ${SEVPS_DB_PASSWORD:-sevps}
+  SEVPS_REDIS_URL: "redis://redis:6379/0"
+  SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:-dev-insecure-key-do-not-use-in-production}
+  SEVPS_DEBUG: ${SEVPS_DEBUG:-1}
+  SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:-localhost,127.0.0.1,web,nginx}
+  SEVPS_TIME_ZONE: ${SEVPS_TIME_ZONE:-Asia/Kolkata}
+  # Phase 9. Empty by default; the entrypoint warns rather than generating a
+  # key, because a key regenerated on every container start invalidates every
+  # push subscription in the fleet.
+  SEVPS_VAPID_PRIVATE_KEY: ${SEVPS_VAPID_PRIVATE_KEY:-}
+  SEVPS_VAPID_SUBJECT: "${SEVPS_VAPID_SUBJECT:-mailto:ops@sevps.local}"
+  SEVPS_MAPBOX_TOKEN: ${SEVPS_MAPBOX_TOKEN:-}
+
+x-app-build: &app_build
+  context: .
+  dockerfile: Dockerfile
 
 services:
   db:
@@ -22,19 +59,18 @@ services:
       POSTGRES_DB: ${SEVPS_DB_NAME:-sevps}
       POSTGRES_USER: ${SEVPS_DB_USER:-sevps}
       POSTGRES_PASSWORD: ${SEVPS_DB_PASSWORD:-sevps}
-      # Emergency dispatch writes constantly; a little WAL headroom avoids
-      # checkpoint stalls during a surge.
       POSTGRES_INITDB_ARGS: "--data-checksums"
     command:
       - postgres
+      # Emergency dispatch writes constantly - telemetry, preemptions, alerts.
+      # WAL headroom avoids checkpoint stalls during a surge, which is exactly
+      # when latency matters most.
       - -c
       - max_wal_size=2GB
       - -c
       - shared_buffers=256MB
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "${SEVPS_DB_PORT:-5432}:5432"
     healthcheck:
       # Checks the actual database, not just the port, so dependents do not
       # start against a server that is still initialising.
@@ -46,9 +82,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "no", "--save", ""]
-    ports:
-      - "${SEVPS_REDIS_PORT:-6379}:6379"
+    # No persistence: the channel layer holds in-flight fan-out, not state.
+    # Losing it on restart costs a few seconds of events and every dashboard
+    # resyncs by polling. Persisting it would buy nothing and add fsyncs to
+    # the hot path.
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -56,53 +94,65 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Runs to completion, then web and worker start. Splitting this out is what
+  # makes replicas safe: schema changes happen exactly once, in one place,
+  # before anything serves traffic.
+  migrate:
+    build: *app_build
+    image: sevps-app:latest
+    command: ["migrate"]
+    environment: *app_env
+    volumes:
+      - static_files:/app/staticfiles
+      - vapid_keys:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py collectstatic --noinput &&
-             daphne -b 0.0.0.0 -p 8000 sevps.asgi:application"
-    environment: &app_env
-      SEVPS_DB_ENGINE: postgres
-      SEVPS_ENABLE_POSTGIS: "1"
-      SEVPS_DB_HOST: db
-      SEVPS_DB_NAME: ${SEVPS_DB_NAME:-sevps}
-      SEVPS_DB_USER: ${SEVPS_DB_USER:-sevps}
-      SEVPS_DB_PASSWORD: ${SEVPS_DB_PASSWORD:-sevps}
-      SEVPS_REDIS_URL: redis://redis:6379/0
-      SEVPS_SECRET_KEY: ${SEVPS_SECRET_KEY:-dev-insecure-key-do-not-use-in-production}
-      SEVPS_DEBUG: ${SEVPS_DEBUG:-1}
-      SEVPS_ALLOWED_HOSTS: ${SEVPS_ALLOWED_HOSTS:-localhost,127.0.0.1,web}
+    build: *app_build
+    image: sevps-app:latest
+    command: ["web"]
+    environment: *app_env
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
-    ports:
-      - "${SEVPS_WEB_PORT:-8000}:8000"
+      - vapid_keys:/app/models
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: ["python", "manage.py", "sevps_worker"]
+    build: *app_build
+    image: sevps-app:latest
+    command: ["worker"]
     environment: *app_env
+    volumes:
+      - media_files:/app/media
+      - vapid_keys:/app/models
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      web:
-        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    # Exactly one, and it must stay that way. The worker sweeps corridors and
+    # expires signal holds; two instances would both decide a junction should
+    # be released and issue duplicate controller commands.
+    deploy:
+      replicas: 1
     restart: unless-stopped
 
 volumes:
   postgres_data:
   static_files:
   media_files:
+  # The VAPID keypair must survive container replacement. Regenerating it
+  # invalidates every push subscription, and the fleet discovers that only
+  # when an alert fails to arrive.
+  vapid_keys:

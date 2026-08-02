@@ -143,9 +143,32 @@ def has_role(user, *roles: str) -> bool:
     return bool(user_roles(user) & set(roles))
 
 
+def group_names_for(role: str) -> set[str]:
+    """Every ``Group.name`` that grants ``role`` - canonical plus legacy.
+
+    The inverse of :func:`canonical`, needed whenever a role has to be turned
+    into a database filter rather than checked against a loaded user. Querying
+    ``groups__name=role`` directly would silently miss a deployment still on
+    the ``operators`` group, which is exactly the upgrade path the aliases
+    exist to protect.
+    """
+    spec = ROLES.get(role)
+    if spec is None:
+        return set()
+    return {spec.key, *spec.aliases}
+
+
 def _roles_with(attribute: str) -> frozenset[str]:
     return frozenset(k for k, spec in ROLES.items() if getattr(spec, attribute))
 
+
+#: Roles that staff the platform. Everything except `public_users`.
+#:
+#: A registered road user is a *subject* of SEVPS, not an operator of it: they
+#: receive driver alerts and report incidents. The RoleSpec for `public_users`
+#: has always said "no operational or clinical access"; this is the constant
+#: that makes the permission layer honour it.
+OPERATIONAL_ROLES = frozenset(k for k in ROLES if k != Role.PUBLIC)
 
 #: Roles cleared to see patient-identifying information.
 CLINICAL_ROLES = _roles_with("clinical_access")

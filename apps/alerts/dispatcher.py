@@ -152,12 +152,42 @@ def broadcast_driver_alerts(trip, progress=None) -> dict:
             },
         )
 
+    pushed = _push_to_subscribed_drivers(issued)
+
     return {
         "issued": len(issued),
         "refreshed": refreshed,
         "cells": sorted(seen_cells),
         "boards_updated": boards,
+        "pushed": pushed,
     }
+
+
+def _push_to_subscribed_drivers(issued) -> int:
+    """Phase 9: reach road users whose app is closed.
+
+    Only *newly issued* alerts are pushed. A refresh means the same warning for
+    the same cell with an updated ETA — the socket carries that to anyone
+    watching, but buzzing a phone every few seconds for one approaching
+    ambulance is how a safety channel gets muted permanently.
+
+    Fail-soft, like every other fan-out here: a road-user warning that cannot
+    be pushed must not abort the alert that was already broadcast and stored.
+    """
+    from django.conf import settings
+
+    if not issued or not settings.SEVPS.get("PUSH_DRIVER_ALERTS", True):
+        return 0
+    try:
+        from apps.notify.service import deliver_driver_alert
+
+        delivered = 0
+        for alert in issued:
+            delivered += deliver_driver_alert(alert, [alert.geohash]).delivered
+        return delivered
+    except Exception:  # pragma: no cover - push must never break Layer 4
+        log.warning("driver-alert push fan-out failed", exc_info=True)
+        return 0
 
 
 def _point_ahead(plan, progress, seconds: float) -> Point | None:

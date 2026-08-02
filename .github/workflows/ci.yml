@@ -1,0 +1,150 @@
+# SEVPS continuous integration.
+#
+# Ordered cheapest-first so a broken build fails in seconds rather than after
+# a browser download: lint and typecheck, then unit tests, then the browser
+# suite. The RBAC job is split out and runs early because an authorisation
+# regression is the one class of failure that must never reach a review queue
+# unnoticed.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  SEVPS_LOG_LEVEL: WARNING
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+
+jobs:
+  checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt pytest pytest-django pytest-cov
+
+      - name: Django system checks
+        run: python manage.py check
+
+      - name: Deployment checks under production settings
+        # DEBUG=0 turns on the whole security block; running it here means a
+        # setting that only breaks in production breaks in CI instead.
+        env:
+          SEVPS_DEBUG: "0"
+          SEVPS_SECRET_KEY: ci-only-key-not-used-anywhere-0123456789abcdef
+          SEVPS_ALLOWED_HOSTS: sevps.example.gov
+          SEVPS_BEHIND_TLS_PROXY: "1"
+        run: python manage.py check --deploy --fail-level ERROR
+
+      - name: Missing migrations
+        # A model change without a migration passes every test and fails on
+        # the first deploy.
+        run: python manage.py makemigrations --check --dry-run
+
+  rbac:
+    name: Authorisation matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt pytest pytest-django
+      - name: Every role against every protected endpoint
+        run: python -m pytest -m rbac -q
+
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt pytest pytest-django pytest-cov
+
+      - name: pytest
+        run: python -m pytest --cov=apps --cov-report=xml --cov-report=term:skip-covered -q
+
+      - name: Django test runner
+        # Both runners are kept working. `manage.py test` is what a municipal
+        # operator with no pytest install will reach for, and a suite that only
+        # runs one way is a suite that quietly stops running the other.
+        run: python manage.py test apps
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      - run: npx vite build
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    # Last: it is the slowest job and the one most likely to be flaky on a
+    # cold runner. No point downloading a browser to discover a type error.
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: pip install -r requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Seed the E2E database
+        # Its own file, seeded once. Playwright starts the servers itself.
+        env:
+          SEVPS_SQLITE_PATH: e2e.sqlite3
+        run: |
+          python manage.py migrate --noinput
+          python manage.py seed_users
+          python manage.py seed_demo
+
+      - name: Playwright
+        working-directory: frontend
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14

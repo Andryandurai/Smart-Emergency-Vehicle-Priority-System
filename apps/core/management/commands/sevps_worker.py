@@ -23,9 +23,10 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.alerts.dispatcher import clear_expired_boards
+from apps.core.live import tick_all as tick_live
 from apps.dispatch.corridor import tick_corridors
-from apps.network.models import CameraFeed
-from apps.network.vision import analyse_camera, cv_backend, ingest_camera_analysis
+from apps.network.cv import pipeline as cv_pipeline
+from apps.network.cv.backends import backend_name as cv_backend
 
 
 class Command(BaseCommand):
@@ -35,6 +36,10 @@ class Command(BaseCommand):
         parser.add_argument("--interval", type=float, default=5.0, help="Seconds between sweeps.")
         parser.add_argument("--vision-every", type=int, default=6, help="Run CV every N sweeps.")
         parser.add_argument("--no-vision", action="store_true")
+        parser.add_argument(
+            "--no-live", action="store_true",
+            help="Skip the ETA/traffic/fleet live push sweep.",
+        )
         parser.add_argument("--rollup-hour", type=int, default=1, help="Hour to roll up metrics.")
 
     def handle(self, *args, **options):
@@ -57,6 +62,27 @@ class Command(BaseCommand):
                 cleared = clear_expired_boards()
                 if cleared:
                     self.stdout.write(f"  cleared {cleared} display board(s)")
+
+                # Live pushes that no GPS fix would trigger: ETA decay, traffic
+                # changes from the CV sweep, and vehicles that have gone silent.
+                if not options["no_live"]:
+                    live = tick_live()
+                    eta = live.get("eta", {})
+                    if eta.get("eta_pushed"):
+                        self.stdout.write(
+                            f"  live: {eta['eta_pushed']} ETA update(s)"
+                            + (f", {eta['stalled']} stalled" if eta.get("stalled") else "")
+                        )
+                    if live.get("traffic", {}).get("segments_changed"):
+                        self.stdout.write(
+                            f"  live: {live['traffic']['segments_changed']} segment(s) changed"
+                        )
+                    if live.get("fleet", {}).get("stale_vehicles"):
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"  live: {live['fleet']['stale_vehicles']} vehicle(s) silent"
+                            )
+                        )
 
                 if not options["no_vision"] and sweep % options["vision_every"] == 0:
                     self._run_vision()
@@ -81,19 +107,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("\nWorker stopped."))
 
     def _run_vision(self) -> None:
-        cameras = CameraFeed.objects.filter(is_active=True).select_related("segment")
-        analysed = incidents = 0
-        for camera in cameras:
-            try:
-                analysis = analyse_camera(camera)
-            except Exception as exc:  # pragma: no cover - a bad feed must not stop the loop
-                self.stderr.write(f"  camera {camera.name} failed: {exc}")
-                continue
-            _, events = ingest_camera_analysis(camera, analysis)
-            analysed += 1
-            incidents += len(events)
-        if analysed:
-            message = f"  vision sweep: {analysed} camera(s)"
-            if incidents:
-                message += f", {incidents} new incident(s)"
-            self.stdout.write(message)
+        """One pass over the camera estate; a bad feed never stops the loop."""
+        result = cv_pipeline.sweep()
+        if not result["cameras_analysed"] and not result["cameras_failed"]:
+            return
+
+        message = f"  vision sweep: {result['cameras_analysed']} camera(s)"
+        if result["events_created"]:
+            message += f", {result['events_created']} new incident(s)"
+        if result["findings"]:
+            message += f", findings={result['findings']}"
+        self.stdout.write(message)
+
+        if result["cameras_failed"]:
+            self.stdout.write(
+                self.style.WARNING(f"  {result['cameras_failed']} camera(s) unreadable")
+            )
+        for sighting in result["emergency_sightings"]:
+            if sighting["visually_corroborated"]:
+                self.stdout.write(
+                    f"  camera confirms {sighting['callsign']} "
+                    f"({sighting['distance_m']} m, conf {sighting['confidence']})"
+                )

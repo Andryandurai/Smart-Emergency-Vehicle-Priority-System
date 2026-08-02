@@ -114,6 +114,28 @@ def board_wall(request):
 # ---------------------------------------------------------------------------
 # React console (Phase 4)
 # ---------------------------------------------------------------------------
+def service_worker(request):
+    """Serve the push service worker from the site root.
+
+    It has to be here rather than bundled as a Vite asset for one hard reason:
+    a service worker's scope cannot rise above its own URL. Served from
+    ``/static/`` it would control ``/static/`` — the only part of the site with
+    no pages in it — and would never receive a push for the console. Served
+    from ``/`` it controls everything.
+
+    ``Service-Worker-Allowed`` is set for the same reason, and the response is
+    marked no-cache: a stale worker keeps delivering with old logic long after
+    a deploy, and there is no user-visible symptom until an alert renders wrong.
+    """
+    path = Path(settings.BASE_DIR) / "static" / "js" / "sw.js"
+    if not path.exists():  # pragma: no cover - only if the file is deleted
+        return HttpResponse("// service worker missing", content_type="application/javascript")
+    response = HttpResponse(path.read_bytes(), content_type="application/javascript")
+    response["Service-Worker-Allowed"] = "/"
+    response["Cache-Control"] = "no-cache, max-age=0"
+    return response
+
+
 def spa_index(request, *args, **kwargs):
     """Serve the built React console for any non-API route.
 

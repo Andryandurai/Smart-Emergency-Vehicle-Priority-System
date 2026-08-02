@@ -5,25 +5,37 @@
  * frontend depends on is greppable in a single file - which is what makes it
  * possible to tell, before changing a serializer, whether the console cares.
  */
-import { api } from "./client";
+import { ApiError, api, getAccessToken } from "./client";
 import type {
   AnalyticsSummary,
+  CategoryDistribution,
+  CorridorOutcomes,
   CurrentUser,
+  DailyTrends,
+  DemandProfile,
   DisplayBoardLive,
   DriverAlert,
   EmergencyRuleSummary,
   Hospital,
   HospitalCapacity,
+  ExportDataset,
+  HospitalLoad,
   Hotspot,
+  Inbox,
   LiveVehicles,
+  NotificationPreferences,
   Paginated,
   Preemption,
+  PushSubscriptionSummary,
+  PushTestResult,
   Recommendation,
+  ResponseDistribution,
   RoadEvent,
   RoleDescriptor,
   SegmentCollection,
   ServiceInfo,
   TokenPair,
+  TrendSummary,
   Trip,
 } from "./types";
 import { unwrap } from "./types";
@@ -186,3 +198,103 @@ export const analytics = {
   accidentHotspots: (signal?: AbortSignal) =>
     api.get<{ hotspots: Hotspot[] }>("/api/v1/analytics/accident-hotspots/", signal),
 };
+
+// ---------------------------------------------------------------------------
+// Notifications (Phase 9)
+// ---------------------------------------------------------------------------
+export const notify = {
+  inbox: (signal?: AbortSignal) => api.get<Inbox>("/api/v1/notify/inbox/", signal),
+
+  markRead: (uuid?: string) =>
+    api.post<{ read: number }>(
+      uuid ? `/api/v1/notify/read/${uuid}/` : "/api/v1/notify/read/",
+      {},
+    ),
+
+  preferences: (signal?: AbortSignal) =>
+    api.get<NotificationPreferences>("/api/v1/notify/preferences/", signal),
+
+  savePreferences: (body: Partial<NotificationPreferences>) =>
+    api.patch<NotificationPreferences>("/api/v1/notify/preferences/", body),
+
+  subscriptions: (signal?: AbortSignal) =>
+    api.get<{ subscriptions: PushSubscriptionSummary[]; push_configured: boolean }>(
+      "/api/v1/notify/subscriptions/",
+      signal,
+    ),
+
+  sendTest: () => api.post<PushTestResult>("/api/v1/notify/test/", {}),
+};
+
+// ---------------------------------------------------------------------------
+// Analytics charts (Phase 10)
+// ---------------------------------------------------------------------------
+export const charts = {
+  trends: (days = 30, signal?: AbortSignal) =>
+    api.get<DailyTrends>(`/api/v1/analytics/trends/?days=${days}`, signal),
+
+  trendSummary: (days = 30, signal?: AbortSignal) =>
+    api.get<TrendSummary>(`/api/v1/analytics/trends/summary/?days=${days}`, signal),
+
+  demand: (days = 30, signal?: AbortSignal) =>
+    api.get<DemandProfile>(`/api/v1/analytics/demand/?days=${days}`, signal),
+
+  distribution: (days = 30, signal?: AbortSignal) =>
+    api.get<CategoryDistribution>(`/api/v1/analytics/distribution/?days=${days}`, signal),
+
+  corridorOutcomes: (days = 30, signal?: AbortSignal) =>
+    api.get<CorridorOutcomes>(`/api/v1/analytics/corridor-outcomes/?days=${days}`, signal),
+
+  responseDistribution: (days = 30, signal?: AbortSignal) =>
+    api.get<ResponseDistribution>(`/api/v1/analytics/response-distribution/?days=${days}`, signal),
+
+  hospitalLoad: (days = 30, signal?: AbortSignal) =>
+    api.get<HospitalLoad>(`/api/v1/analytics/hospital-load/?days=${days}`, signal),
+
+  exports: (signal?: AbortSignal) =>
+    api.get<{ datasets: ExportDataset[] }>("/api/v1/analytics/export/", signal),
+
+  exportUrl: (dataset: string, days: number) =>
+    `/api/v1/analytics/export/${dataset}.csv?days=${days}`,
+
+  /**
+   * Download an export.
+   *
+   * Deliberately not a plain `<a href download>`. SEVPS authenticates with a
+   * bearer token held in memory, and a browser navigation carries no such
+   * header - the refresh cookie is scoped to /api/v1/auth/ and is not a
+   * session. Every export link therefore 401'd, which presented as a browser
+   * downloading a file called `daily.csv` containing an error page. Found by
+   * the Playwright suite in Phase 12.
+   *
+   * So: fetch with credentials, then hand the browser a blob.
+   */
+  downloadExport: async (dataset: string, days: number): Promise<void> => {
+    const token = getAccessToken();
+    const response = await fetch(charts.exportUrl(dataset, days), {
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      throw new ApiError(`Export failed (${response.status})`, response.status);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filenameFrom(response) ?? `sevps-${dataset}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoked on the next tick: revoking synchronously can cancel the
+    // download in some browsers before it has read the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  },
+};
+
+/** Honour the server's Content-Disposition, which carries the date stamp. */
+function filenameFrom(response: Response): string | null {
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  return /filename="([^"]+)"/.exec(disposition)?.[1] ?? null;
+}

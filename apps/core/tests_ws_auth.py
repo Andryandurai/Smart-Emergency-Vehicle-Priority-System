@@ -67,8 +67,14 @@ class WebSocketJWTTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_garbage_token_yields_anonymous_not_an_error(self):
-        """A bad token must not crash the handshake; the consumer decides."""
-        communicator = WebsocketCommunicator(application, "/ws/ops/?token=not-a-jwt")
+        """A bad token must not crash the handshake; the policy then decides.
+
+        Checked on the drivers socket, which is legitimately public - a road
+        user with a stale token still needs their ambulance warning.
+        """
+        communicator = WebsocketCommunicator(
+            application, "/ws/drivers/?lat=13.06&lon=80.25&token=not-a-jwt"
+        )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
 
@@ -76,9 +82,17 @@ class WebSocketJWTTests(TransactionTestCase):
         self.assertFalse(viewer["authenticated"])
         await communicator.disconnect()
 
-    async def test_no_token_still_connects_anonymously(self):
-        """Public feeds (display boards) must keep working without credentials."""
-        communicator = WebsocketCommunicator(application, "/ws/ops/")
+    async def test_garbage_token_is_refused_on_a_protected_socket(self):
+        """The same bad token must not open the control-room firehose."""
+        communicator = WebsocketCommunicator(application, "/ws/ops/?token=not-a-jwt")
+        connected, code = await communicator.connect()
+        self.assertFalse(connected)
+        self.assertEqual(code, 4401)
+        await communicator.disconnect()
+
+    async def test_public_feed_still_connects_without_a_token(self):
+        """Layer 4's promise: a road user needs no account."""
+        communicator = WebsocketCommunicator(application, "/ws/drivers/?lat=13.06&lon=80.25")
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
 

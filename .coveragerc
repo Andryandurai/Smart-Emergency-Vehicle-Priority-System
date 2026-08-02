@@ -1,0 +1,40 @@
+# Coverage configuration.
+#
+# No `fail_under` threshold, on purpose. A number that must be met gets met by
+# writing tests against whatever is cheapest to cover - serializers and model
+# __str__ methods - while the corridor timing arithmetic and the redaction
+# rules stay untested because they are harder. Coverage is used here as a map
+# of what has not been looked at, not as a gate.
+#
+#   pytest --cov=apps --cov-report=term-missing --cov-report=html
+
+[run]
+source = apps
+branch = True
+omit =
+    */migrations/*
+    */tests*.py
+    */conftest.py
+    */management/commands/seed_demo.py
+    */management/commands/simulate.py
+    */__init__.py
+    */apps.py
+    */admin.py
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    def __str__
+    raise NotImplementedError
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    # Import guards for optional dependencies (ultralytics, firebase-admin,
+    # scikit-learn). The fallback path is tested; the import failure is not
+    # reproducible without uninstalling the package.
+    except ImportError:
+
+[html]
+directory = htmlcov

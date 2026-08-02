@@ -423,3 +423,183 @@ export function unwrap<T>(payload: Paginated<T> | T[] | undefined | null): T[] {
   if (Array.isArray(payload)) return payload;
   return payload.results ?? [];
 }
+
+// ---------------------------------------------------------------------------
+// Notifications and push (Phase 9)
+// ---------------------------------------------------------------------------
+export type NotificationSeverity = "info" | "success" | "warning" | "critical";
+
+export interface NotificationRecord {
+  uuid: string;
+  title: string;
+  body: string;
+  severity: NotificationSeverity;
+  severity_label: string;
+  category: string;
+  category_label: string;
+  link: string;
+  dedupe_key: string;
+  context: Record<string, unknown>;
+  created_at: string;
+  delivered_count: number;
+  failed_count: number;
+  is_read: boolean;
+}
+
+export interface Inbox {
+  notifications: NotificationRecord[];
+  unread: number;
+  window_hours: number;
+}
+
+export interface NotificationPreferences {
+  muted_categories: string[];
+  quiet_hours_start: number | null;
+  quiet_hours_end: number | null;
+  push_enabled: boolean;
+  available_categories: { value: string; label: string }[];
+  critical_always_delivered: boolean;
+  note: string;
+}
+
+export interface PushSubscriptionSummary {
+  id: number;
+  backend: string;
+  endpoint_hint: string;
+  user_agent: string;
+  is_active: boolean;
+  failure_count: number;
+  is_healthy: boolean;
+  last_success_at: string | null;
+  last_failure_reason: string;
+  created_at: string;
+}
+
+export interface PushTestResult {
+  notification_id: string | null;
+  attempted: number;
+  delivered: number;
+  failed: number;
+  skipped: number;
+  truncated: boolean;
+  backend_note: string;
+}
+
+// ---------------------------------------------------------------------------
+// Analytics charts (Phase 10)
+// ---------------------------------------------------------------------------
+export interface SeriesSpec {
+  key: string;
+  label: string;
+  unit: string;
+  /** "count" -> a missing day is 0. "measure" -> a missing day is null. */
+  kind: "count" | "measure";
+  colour: string;
+  /** null = neither direction is an improvement (demand volume). */
+  higher_is_better: boolean | null;
+  description: string;
+}
+
+/** One day. Metric keys are dynamic, hence the index signature. */
+export interface DailyPoint {
+  date: string;
+  label: string;
+  [metric: string]: string | number | null;
+}
+
+export interface DailyTrends {
+  window_days: number;
+  start: string;
+  end: string;
+  city: string;
+  points: DailyPoint[];
+  series: SeriesSpec[];
+  default_series: string[];
+  materialised_days: number;
+  computed_live_days: number;
+}
+
+export interface TrendMetric {
+  key: string;
+  label: string;
+  unit: string;
+  previous: number | null;
+  current: number | null;
+  change_pct: number | null;
+  improving: boolean | null;
+  higher_is_better: boolean | null;
+}
+
+export interface TrendSummary {
+  window_days: number;
+  comparable: boolean;
+  split_at?: string;
+  metrics: TrendMetric[];
+}
+
+export interface DemandProfile {
+  window_days: number;
+  trips: number;
+  hours: {
+    hour: number; label: string; trips: number; share: number;
+    avg_response_s: number | null; level_1: number;
+  }[];
+  weekdays: { weekday: number; label: string; trips: number; share: number }[];
+  peak_hour: string | null;
+  timezone: string;
+}
+
+export interface Slice {
+  key: string;
+  label: string;
+  value: number;
+  colour: string;
+}
+
+export interface CategoryDistribution {
+  window_days: number;
+  total: number;
+  categories: Slice[];
+  levels: Slice[];
+}
+
+export interface CorridorOutcomes {
+  window_days: number;
+  points: {
+    date: string; label: string; activated: number; yielded: number;
+    failed: number; cancelled: number; pending: number;
+  }[];
+  legend: { key: string; label: string; colour: string }[];
+}
+
+export interface ResponseDistribution {
+  window_days: number;
+  samples: number;
+  buckets: {
+    label: string; low_min: number; high_min: number | null;
+    count: number; share: number; within_target: boolean;
+  }[];
+  target_minutes: number;
+  within_target: number;
+  within_target_share: number | null;
+  median_s: number | null;
+  p90_s: number | null;
+}
+
+export interface HospitalLoad {
+  window_days: number;
+  hospitals: {
+    code: string; name: string; trips: number; overrides: number;
+    override_share: number; avg_transport_s: number | null;
+  }[];
+  total_routed: number;
+  truncated: boolean;
+}
+
+export interface ExportDataset {
+  key: string;
+  title: string;
+  description: string;
+  columns: string[];
+  url: string;
+}

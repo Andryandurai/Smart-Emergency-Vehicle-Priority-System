@@ -21,6 +21,7 @@ from rest_framework import permissions
 
 from apps.core.roles import (
     DISPATCH_ROLES,
+    OPERATIONAL_ROLES,
     TRAFFIC_ROLES,
     Role,
     has_role,
@@ -63,12 +64,27 @@ class ReadOnlyOrAuthenticated(BaseRolePermission):
 
 
 class IsAuthenticatedRole(BaseRolePermission):
-    """Authentication required for *every* method, including reads.
+    """An *operational* role required for every method, including reads.
 
-    Used on endpoints that expose patient-identifying or dispatch-sensitive
-    data, where anonymous read is not acceptable.
+    Used on endpoints exposing dispatch-sensitive or patient-identifying data,
+    where anonymous read is not acceptable.
+
+    Note what this is not: "any authenticated user". `public_users` is a real
+    role - a citizen with an account who receives driver alerts and reports
+    incidents - and its RoleSpec has always read "no operational or clinical
+    access". Until this was pinned by the RBAC matrix, holding that role also
+    granted live ambulance positions, active trips, emergency routes and the
+    full analytics history, because an empty `required_roles` means "anyone
+    signed in".
+
+    Live fleet tracking is not public data even in aggregate: it discloses,
+    in near real time, which streets an ambulance was dispatched to.
+
+    `/api/v1/auth/me/` deliberately uses DRF's plain `IsAuthenticated` instead,
+    so a public user can still read their own account.
     """
 
+    required_roles = tuple(sorted(OPERATIONAL_ROLES))
     allow_safe_methods = False
 
 
@@ -84,6 +100,29 @@ class PublicRead(permissions.BasePermission):
 
     def has_permission(self, request, view) -> bool:
         return request.method in permissions.SAFE_METHODS
+
+
+class PublicDeviceRegistration(permissions.BasePermission):
+    """Public, and deliberately writable - device self-registration only.
+
+    A narrow exception to :class:`PublicRead`, needed because Layer 4's promise
+    is that a road user's phone receives an approaching-ambulance warning
+    *without an account*, and registering for one is a POST.
+
+    What makes it safe is that the caller can only ever describe itself. The
+    request carries a push endpoint the browser just minted and a coarse
+    position; it names no other subject, reads nothing back, and grants no
+    access to platform state. Existing use: driver position reporting. Phase 9
+    use: push subscribe and unsubscribe.
+
+    Views using this must accept only writes that are self-describing. Anything
+    that reads operational data or acts on another entity belongs behind a role.
+    """
+
+    message = "This endpoint accepts device self-registration only."
+
+    def has_permission(self, request, view) -> bool:
+        return request.method in (*permissions.SAFE_METHODS, "POST")
 
 
 # ---------------------------------------------------------------------------
