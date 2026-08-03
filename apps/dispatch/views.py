@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from apps.core.enums import PatientSymptom, TripStage, VehicleStatus
 from apps.core.geo import Point
 from apps.core.permissions import (
+    CanCancelTrip,
     IsAmbulanceCrew,
     IsAuthenticatedRole,
     IsDispatcher,
@@ -52,7 +53,10 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
     action_permissions = {
         "create": [IsDispatcher],
         "destroy": [IsDispatcher],
-        "cancel": [IsDispatcher],
+        # Dispatch may cancel anything; a crew only their own vehicle's
+        # response - see CanCancelTrip for why that had to become reachable
+        # from the cab.
+        "cancel": [CanCancelTrip],
         "update": [IsDispatcher],
         "partial_update": [IsDispatcher],
         "assess": [IsAmbulanceCrew],
@@ -60,6 +64,7 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
         "update_condition": [IsAmbulanceCrew],
         "handover": [IsAmbulanceCrew],
         "reroute": [IsAmbulanceCrew],
+        "reroute_check": [IsAmbulanceCrew],
         "corridor_sync": [IsTrafficPolice],
         "corridor_release": [IsTrafficPolice],
     }
@@ -244,6 +249,34 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         return Response(RoutePlanSerializer(plan).data)
+
+    @action(detail=True, methods=["get"], url_path="reroute/check")
+    def reroute_check(self, request, pk=None):
+        """Would this trip be better off on another road, and why?
+
+        Read-only: it evaluates the closure and congestion state of the road
+        ahead and changes nothing. Replans are normally applied by
+        ``sevps_worker``'s sweep, but the worker is a separate process that a
+        pilot machine often is not running - and a crew driving into a jam the
+        graph already knew about is the exact failure Layer 2 exists to
+        prevent. Exposing the decision lets the in-cab console apply it
+        itself, and, just as importantly, *say why* rather than silently
+        redrawing the line on the map.
+        """
+        from apps.brain.rerouting import evaluate_trip
+
+        trip = self.get_object()
+        if trip.active_route is None or not trip.destination_latitude:
+            return Response(
+                {
+                    "should_reroute": False,
+                    "reason": "no active route to evaluate",
+                    "gain_s": 0.0,
+                    "blocked": False,
+                    "congested": False,
+                }
+            )
+        return Response(evaluate_trip(trip, reason="driver console").as_dict())
 
     @action(detail=True, methods=["get"], url_path="corridor")
     def corridor(self, request, pk=None):

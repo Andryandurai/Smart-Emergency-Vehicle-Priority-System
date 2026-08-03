@@ -11,7 +11,7 @@
  * Everything behind it is the existing backend - the same shifts, trips,
  * recommender and sockets. Only the surface is different.
  */
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { profile as profileApi } from "@/api/endpoints";
@@ -42,6 +42,16 @@ export function ParamedicShell() {
   const logout = useAuthStore((state) => state.logout);
   const [me, setMe] = useState<StaffProfile | null>(null);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Leaving the portal is part of signing out. Without the navigation this
+  // relied on the auth guard noticing and bouncing, which left the paramedic
+  // layout on screen for a frame and, worse, left `/p` as the path the login
+  // screen was arrived from - the stale `from` the next sign-in used to obey.
+  const signOut = async (): Promise<void> => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   useEffect(() => {
     profileApi.mine().then(setMe).catch(() => setMe(null));
@@ -66,7 +76,7 @@ export function ParamedicShell() {
             <div className="pm-me-role">{me?.staff_id || "Paramedic"}</div>
           </div>
           <Avatar profile={me} />
-          <button type="button" className="pm-signout" onClick={() => void logout()}>
+          <button type="button" className="pm-signout" onClick={() => void signOut()}>
             Sign out
           </button>
         </div>

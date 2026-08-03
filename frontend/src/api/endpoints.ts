@@ -43,9 +43,11 @@ import type {
   PushTestResult,
   ReadinessOutcome,
   Recommendation,
+  RerouteCheck,
   ResponseDistribution,
   RoadEvent,
   RoleDescriptor,
+  RoutePlanSummary,
   RoutePreview,
   SegmentCollection,
   SelectableVehicle,
@@ -353,6 +355,22 @@ export const dispatch = {
 
   cancel: (tripId: number, reason: string) =>
     api.post<Trip>(`/api/v1/dispatch/trips/${tripId}/cancel/`, { reason }),
+
+  /**
+   * Should this trip be moved onto a different road, and why?
+   *
+   * Read-only: it evaluates the closure and congestion state of the road
+   * ahead without changing anything. The driver console polls it so the cab
+   * reroutes and can *say why* even when `sevps_worker` is not running - the
+   * worker is what normally applies replans, and a demo machine rarely has
+   * one.
+   */
+  rerouteCheck: (tripId: number, signal?: AbortSignal) =>
+    api.get<RerouteCheck>(`/api/v1/dispatch/trips/${tripId}/reroute/check/`, signal),
+
+  /** Force a fresh route from the vehicle's current position. */
+  reroute: (tripId: number, reason = "driver requested") =>
+    api.post<RoutePlanSummary>(`/api/v1/dispatch/trips/${tripId}/reroute/`, { reason }),
 
   releaseCorridor: (tripId: number, reason: string) =>
     api.post<unknown>(`/api/v1/dispatch/trips/${tripId}/corridor/release/`, { reason }),

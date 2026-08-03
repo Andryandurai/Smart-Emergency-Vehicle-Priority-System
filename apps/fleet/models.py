@@ -13,6 +13,7 @@ from django.utils import timezone
 from apps.core.enums import (
     LightPattern,
     PriorityLevel,
+    ShiftStatus,
     SirenMode,
     VehicleOwnership,
     VehicleReadiness,
@@ -79,11 +80,24 @@ class VehicleQuerySet(GeoQuerySet):
         Available, not already crewed, and not grounded. The open-shift
         exclusion is what stops two drivers claiming the same vehicle from
         the picker before the unique constraint rejects the second one.
+
+        DRAFT counts as taken. It was omitted here while the uniqueness rule
+        and ``claim`` both used ``CrewShift.objects.open()``, which includes
+        it - so an ambulance another driver was standing at, part-way through
+        its inspection, was still offered in the picker and then refused with
+        a 409 on the tap. The three statuses must match ``open()`` exactly or
+        the picker and the constraint disagree again.
         """
         return (
             self.filter(status=VehicleStatus.AVAILABLE)
             .exclude(readiness__in=[VehicleReadiness.NOT_READY, VehicleReadiness.MAINTENANCE])
-            .exclude(shifts__status__in=["pending", "active"])
+            .exclude(
+                shifts__status__in=[
+                    ShiftStatus.DRAFT,
+                    ShiftStatus.PENDING,
+                    ShiftStatus.ACTIVE,
+                ]
+            )
         )
 
     def on_mission(self):

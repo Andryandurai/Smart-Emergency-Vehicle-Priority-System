@@ -3,17 +3,28 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { auth } from "@/api/endpoints";
 import type { DemoAccount } from "@/api/types";
+import { landingFor } from "@/app/portals";
 import { useAuthStore } from "@/stores/authStore";
 
 export function LoginPage() {
   const status = useAuthStore((state) => state.status);
+  const user = useAuthStore((state) => state.user);
   const submitting = useAuthStore((state) => state.submitting);
   const error = useAuthStore((state) => state.error);
   const login = useAuthStore((state) => state.login);
 
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? "/";
+  /**
+   * Where the guard bounced this visitor from, if it did.
+   *
+   * Only ever a *suggestion*. It is whatever path was on screen when the
+   * session ended, which after a sign-out is the previous user's portal —
+   * sign out of the paramedic app at `/p` and this reads `/p` for whoever
+   * signs in next. `landingFor` discards it unless it belongs to the portal
+   * the new account actually lives in.
+   */
+  const from = (location.state as { from?: string } | null)?.from ?? null;
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -35,11 +46,14 @@ export function LoginPage() {
       .catch(() => setAccounts([]));
   }, []);
 
-  if (status === "authenticated") return <Navigate to={from} replace />;
+  if (status === "authenticated") return <Navigate to={landingFor(user, from)} replace />;
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (await login(username, password)) navigate(from, { replace: true });
+    if (!(await login(username, password))) return;
+    // Read the user the login just stored, rather than this render's closure,
+    // which still holds the signed-out state.
+    navigate(landingFor(useAuthStore.getState().user, from), { replace: true });
   };
 
   const fill = (user: string, pass: string): void => {

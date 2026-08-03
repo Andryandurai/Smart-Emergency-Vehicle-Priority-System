@@ -35,6 +35,8 @@ interface NotifyState {
   ingest: (payload: Partial<NotificationRecord> & { id?: string; title?: string }) => void;
   markRead: (uuid?: string) => Promise<void>;
   setPushState: (state: string, detail: string) => void;
+  /** Drop everything. Called on sign-in and sign-out - see `reset` below. */
+  reset: () => void;
 }
 
 function collapse(items: NotificationRecord[]): NotificationRecord[] {
@@ -115,6 +117,19 @@ export const useNotifyStore = create<NotifyState>((set, get) => ({
 
   setPushState(pushState, pushDetail) {
     set({ pushState, pushDetail });
+  },
+
+  /**
+   * Clear the inbox.
+   *
+   * The notification list is role-scoped and personal, and this store outlived
+   * the session that filled it: signing out of an administrator account and
+   * back in as a driver left the driver reading the administrator's alerts
+   * until the first refresh landed. The push permission state is deliberately
+   * kept — it describes the browser, not the person.
+   */
+  reset() {
+    set({ items: [], unread: 0, loading: false, error: null });
   },
 }));
 

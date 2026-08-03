@@ -199,6 +199,40 @@ class IsParamedic(BaseRolePermission):
     message = "Paramedic privileges are required."
 
 
+class CanCancelTrip(BaseRolePermission):
+    """Dispatch may cancel any response; a crew may cancel only their own.
+
+    Cancelling used to be dispatch-only, which is right for the control room's
+    authority and wrong for the vehicle: a crew stood down at the roadside, or
+    with a patient who has refused transport, had a live trip they could not
+    close and therefore could not start the next emergency behind. The rule
+    the driver portal enforces - one emergency at a time, ended by completing
+    the handover or cancelling it - needs cancelling to be reachable from the
+    cab.
+
+    Scoping is what keeps that safe. A crew member is authorised for exactly
+    the vehicle they are signed on to, so a driver still cannot cancel another
+    ambulance's response. The check runs in ``has_object_permission``, which
+    DRF calls from ``get_object`` on the detail action.
+    """
+
+    required_roles = (Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN, *DISPATCH_ROLES)
+    message = "Only this ambulance's crew or a dispatcher can cancel this response."
+
+    def has_object_permission(self, request, view, obj) -> bool:
+        if has_role(request.user, *DISPATCH_ROLES):
+            return True
+
+        from apps.fleet.crew import CrewShift
+
+        return (
+            CrewShift.objects.open()
+            .for_user(request.user)
+            .filter(vehicle_id=getattr(obj, "vehicle_id", None))
+            .exists()
+        )
+
+
 class IsOperator(IsTrafficPolice):
     """Backward-compatible alias for the pre-RBAC operator policy.
 

@@ -12,6 +12,27 @@ import { create } from "zustand";
 import { ApiError, setAccessToken, setAuthLostHandler } from "@/api/client";
 import { auth } from "@/api/endpoints";
 import type { CurrentUser, Role } from "@/api/types";
+import { useNotifyStore } from "@/stores/notifyStore";
+import { useOpsStore } from "@/stores/opsStore";
+
+/**
+ * Drop every scrap of the previous session.
+ *
+ * Zustand stores are module singletons and outlive a sign-out, so without
+ * this the next person to sign in inherits the last one's data: an
+ * administrator's vehicles, trips, corridor log and notifications were all
+ * still in memory when a driver signed in afterwards, and rendered before
+ * the first fetch replaced them. That is a data leak across accounts, and it
+ * is also half of what made the portals look like they had collided.
+ *
+ * Called on sign-in as well as sign-out. Sign-out alone is not enough: a
+ * session can end without one - an expired refresh token, a closed laptop -
+ * and the next sign-in must still start from nothing.
+ */
+function clearSessionState(): void {
+  useOpsStore.getState().reset();
+  useNotifyStore.getState().reset();
+}
 
 interface AuthState {
   user: CurrentUser | null;
@@ -48,6 +69,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       setAuthLostHandler(() => {
         setAccessToken(null);
+        clearSessionState();
         set({ user: null, status: "anonymous" });
       });
     }
@@ -57,6 +79,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ submitting: true, error: null });
     try {
       const pair = await auth.login(username, password);
+      // Before anything is fetched under the new identity, so a stale row
+      // cannot survive into the new session.
+      clearSessionState();
       setAccessToken(pair.access);
       // The token response embeds the user, but /auth/me/ re-derives roles
       // from the database - authoritative if a role changed since issue.
@@ -83,6 +108,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // must still end, or the operator is stuck signed in.
     }
     setAccessToken(null);
+    clearSessionState();
     set({ user: null, status: "anonymous", error: null });
   },
 

@@ -2,7 +2,13 @@ import { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/app/AppShell";
+import { PortalGate } from "@/app/PortalGate";
 import { RequireAuth } from "@/app/RequireAuth";
+import { DriverShell } from "@/driver/DriverShell";
+import { HospitalsPage as DriverHospitalsPage } from "@/driver/HospitalsPage";
+import { NavigationPage as DriverNavigationPage } from "@/driver/NavigationPage";
+import { ProfilePage as DriverProfilePage } from "@/driver/ProfilePage";
+import { TakeoverPage } from "@/driver/TakeoverPage";
 import { BoardsPage } from "@/pages/BoardsPage";
 import { DriverConsolePage } from "@/pages/DriverConsolePage";
 import { DriverPage } from "@/pages/DriverPage";
@@ -53,6 +59,10 @@ export function App() {
 
   return (
     <BrowserRouter>
+      {/* Portal isolation, above every shell. Answers "may this signed-in
+          user be on this path" for the whole route table, including the
+          public screens that sit outside RequireAuth. See PortalGate. */}
+      <PortalGate>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
@@ -66,6 +76,19 @@ export function App() {
             <Route path="navigate" element={<ParamedicNavigationPage />} />
             <Route path="hospitals" element={<ParamedicHospitalsPage />} />
             <Route path="profile" element={<ParamedicProfilePage />} />
+          </Route>
+        </Route>
+
+        {/* The driver portal, likewise its own application: a cab instrument
+            panel with four tabs and no city map. Distinct from `/driver`,
+            which is the public road-user alert receiver - same word, opposite
+            side of the windscreen. See DriverShell. */}
+        <Route element={<RequireAuth />}>
+          <Route path="/d" element={<DriverShell />}>
+            <Route index element={<TakeoverPage />} />
+            <Route path="navigate" element={<DriverNavigationPage />} />
+            <Route path="hospitals" element={<DriverHospitalsPage />} />
+            <Route path="profile" element={<DriverProfilePage />} />
           </Route>
         </Route>
 
@@ -101,6 +124,7 @@ export function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
+      </PortalGate>
     </BrowserRouter>
   );
 }

@@ -146,6 +146,21 @@ export interface RoutePreview {
   signalised_nodes: { intersection_id: number; eta_offset_s: number }[];
 }
 
+/**
+ * Why the platform would - or would not - move a trip onto another road.
+ *
+ * Mirrors `RerouteDecision.as_dict` in apps/brain/rerouting.py. `blocked` and
+ * `congested` are separate because the driver console words them differently:
+ * a closure is a fact, congestion is a judgement the crew may overrule.
+ */
+export interface RerouteCheck {
+  should_reroute: boolean;
+  reason: string;
+  gain_s: number;
+  blocked: boolean;
+  congested: boolean;
+}
+
 export interface Trip {
   id: number;
   uuid: string;
