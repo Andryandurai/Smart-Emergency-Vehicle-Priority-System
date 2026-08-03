@@ -121,7 +121,7 @@ def hospital_prepare(trip, hospital) -> dict:
                 f"Priority level {trip.priority_level}."
             ),
             severity=Severity.CRITICAL if trip.priority_level == 1 else Severity.WARNING,
-            audience=(Role.HOSPITAL, Role.DISPATCHER),
+            audience=(Role.HOSPITAL, Role.ADMIN),
             link=f"/hospital/{hospital.code}",
             extra_groups=(hospital_group(hospital.code),),
             dedupe_key=f"inbound:{trip.id}",
@@ -141,7 +141,7 @@ def corridor_failed(trip, controller_id: str, detail: str) -> dict:
             title=f"Signal preemption failed at {controller_id}",
             body=f"{trip.vehicle.callsign}: {detail}. Junction stays on normal timing.",
             severity=Severity.WARNING,
-            audience=(Role.TRAFFIC_POLICE, Role.DISPATCHER),
+            audience=(Role.ADMIN,),
             extra_groups=(vehicle_group(trip.vehicle.callsign),),
             dedupe_key=f"corridor-fail:{trip.id}:{controller_id}",
             context={"trip_id": trip.id, "controller_id": controller_id},
@@ -155,7 +155,7 @@ def priority_escalated(trip, previous_level: int, trigger: str) -> dict:
             title=f"{trip.reference} escalated to Level {trip.priority_level}",
             body=f"{trigger}. Was Level {previous_level}.",
             severity=Severity.CRITICAL,
-            audience=(Role.DISPATCHER, Role.TRAFFIC_POLICE, Role.HOSPITAL),
+            audience=(Role.ADMIN, Role.HOSPITAL),
             extra_groups=(vehicle_group(trip.vehicle.callsign),),
             dedupe_key=f"escalation:{trip.id}",
             context={"trip_id": trip.id, "priority_level": trip.priority_level},
@@ -169,7 +169,7 @@ def route_blocked(trip, reason: str) -> dict:
             title=f"{trip.reference} rerouted",
             body=reason,
             severity=Severity.WARNING,
-            audience=(Role.DISPATCHER, Role.TRAFFIC_POLICE),
+            audience=(Role.ADMIN,),
             extra_groups=(vehicle_group(trip.vehicle.callsign),),
             dedupe_key=f"reroute:{trip.id}",
             context={"trip_id": trip.id},
@@ -184,8 +184,103 @@ def no_hospital_available(trip, detail: str) -> dict:
             title=f"No receiving hospital for {trip.reference}",
             body=detail,
             severity=Severity.CRITICAL,
-            audience=(Role.DISPATCHER, Role.ADMIN),
+            audience=(Role.ADMIN,),
             dedupe_key=f"no-hospital:{trip.id}",
             context={"trip_id": trip.id},
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Driver module (Phase 13): readiness, maintenance and in-transport breakdown
+# ---------------------------------------------------------------------------
+def inspection_skipped(vehicle, shift, reason: str) -> dict:
+    """A vehicle went out without its check.
+
+    Deliberately a notification and not merely a log line. The skip is the
+    right call in an emergency, but somebody has to be told that a vehicle is
+    running on an unverified inspection, and has to be able to chase it once
+    the call is over.
+    """
+    return publish(
+        Notification(
+            title=f"{vehicle.callsign} dispatched without inspection",
+            body=(
+                f"Driver skipped the readiness check: {reason}. "
+                f"Vehicle is temporarily ready - inspection still outstanding."
+            ),
+            severity=Severity.WARNING,
+            audience=(Role.ADMIN,),
+            link="/fleet",
+            dedupe_key=f"inspection-skipped:{shift.id}",
+            context={"vehicle": vehicle.callsign, "shift_id": shift.id},
+        )
+    )
+
+
+def vehicle_not_ready(vehicle, report) -> dict:
+    """A failed inspection has grounded a vehicle."""
+    return publish(
+        Notification(
+            title=f"{vehicle.callsign} failed readiness check",
+            body=(
+                f"Faults: {', '.join(report.reasons) or 'unspecified'}. "
+                f"Vehicle is grounded until fleet management clears it."
+            ),
+            severity=Severity.CRITICAL,
+            audience=(Role.ADMIN,),
+            link="/fleet",
+            dedupe_key=f"not-ready:{vehicle.id}",
+            context={"vehicle": vehicle.callsign, "report_id": report.id},
+        )
+    )
+
+
+def ambulance_breakdown(breakdown) -> dict:
+    """An ambulance has failed with a patient on board.
+
+    The widest audience of any notification in the system, and correctly so:
+    dispatch has to find a replacement, the hospital has to expect a delay or
+    a different vehicle, and the control room has to know a corridor is about
+    to be abandoned mid-route.
+    """
+    trip = breakdown.trip
+    hospital = trip.destination_hospital
+    extra = (hospital_group(hospital.code),) if hospital else ()
+    return publish(
+        Notification(
+            title=f"BREAKDOWN - {breakdown.vehicle.callsign} with patient on board",
+            body=(
+                f"{trip.reference} - {trip.get_emergency_category_display()}, "
+                f"priority {trip.priority_level}"
+                + (f", bound for {hospital.name}" if hospital else "")
+                + ". Seeking replacement ambulance."
+            ),
+            severity=Severity.CRITICAL,
+            audience=(Role.ADMIN, Role.HOSPITAL),
+            link="/fleet",
+            extra_groups=extra,
+            dedupe_key=f"breakdown:{breakdown.id}",
+            context={"breakdown_id": breakdown.id, "trip_id": trip.id},
+        )
+    )
+
+
+def transfer_accepted(breakdown, vehicle) -> dict:
+    trip = breakdown.trip
+    hospital = trip.destination_hospital
+    extra = (hospital_group(hospital.code),) if hospital else ()
+    return publish(
+        Notification(
+            title=f"{vehicle.callsign} taking over {trip.reference}",
+            body=(
+                f"Replacement accepted for {breakdown.vehicle.callsign}. "
+                f"Patient transfer in progress."
+            ),
+            severity=Severity.WARNING,
+            audience=(Role.ADMIN, Role.HOSPITAL),
+            extra_groups=extra + (vehicle_group(vehicle.callsign),),
+            dedupe_key=f"breakdown:{breakdown.id}",
+            context={"breakdown_id": breakdown.id, "trip_id": trip.id},
         )
     )

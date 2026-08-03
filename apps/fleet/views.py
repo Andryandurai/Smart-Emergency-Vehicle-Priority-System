@@ -173,7 +173,9 @@ class EmergencyVehicleViewSet(viewsets.ModelViewSet):
         radius = float(request.query_params.get("radius_m", 15000))
         vehicle_type = request.query_params.get("type")
 
-        qs = EmergencyVehicle.objects.deployable()
+        # Dispatchable rather than deployable: "nearest unit I can send" must
+        # not include one that is grounded.
+        qs = EmergencyVehicle.objects.dispatchable()
         if vehicle_type:
             qs = qs.filter(vehicle_type=vehicle_type)
 

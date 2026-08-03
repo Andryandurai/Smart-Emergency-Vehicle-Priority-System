@@ -14,6 +14,8 @@ from apps.core.enums import (
     LightPattern,
     PriorityLevel,
     SirenMode,
+    VehicleOwnership,
+    VehicleReadiness,
     VehicleStatus,
     VehicleType,
 )
@@ -51,7 +53,38 @@ class VehicleQuerySet(GeoQuerySet):
         return self.exclude(status=VehicleStatus.OFFLINE)
 
     def deployable(self):
+        """Free to be sent to a call.
+
+        Readiness is a separate gate applied at dispatch rather than folded in
+        here: this queryset also answers "which ambulances exist and are
+        idle", and a grounded vehicle still needs to appear in that answer.
+        """
         return self.filter(status=VehicleStatus.AVAILABLE)
+
+    def dispatchable(self):
+        """Free to be sent to a call *and* fit to go.
+
+        Excludes vehicles grounded by a failed inspection or in the workshop.
+        ``TEMPORARILY_READY`` is included by design - that is the emergency
+        skip, whose entire purpose is to let a vehicle roll with the
+        inspection still owed.
+        """
+        return self.deployable().exclude(
+            readiness__in=[VehicleReadiness.NOT_READY, VehicleReadiness.MAINTENANCE]
+        )
+
+    def selectable_for_takeover(self):
+        """Ambulances a driver may take over at the start of a shift.
+
+        Available, not already crewed, and not grounded. The open-shift
+        exclusion is what stops two drivers claiming the same vehicle from
+        the picker before the unique constraint rejects the second one.
+        """
+        return (
+            self.filter(status=VehicleStatus.AVAILABLE)
+            .exclude(readiness__in=[VehicleReadiness.NOT_READY, VehicleReadiness.MAINTENANCE])
+            .exclude(shifts__status__in=["pending", "active"])
+        )
 
     def on_mission(self):
         return self.filter(
@@ -74,6 +107,13 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
     registration = models.CharField(max_length=24, blank=True)
     vehicle_type = models.CharField(
         max_length=20, choices=VehicleType.choices, default=VehicleType.AMBULANCE, db_index=True
+    )
+    ownership = models.CharField(
+        max_length=20,
+        choices=VehicleOwnership.choices,
+        default=VehicleOwnership.GOVERNMENT,
+        db_index=True,
+        help_text="Operating sector - decides billing, escalation contact and dispatch agreement",
     )
     operator = models.CharField(max_length=140, blank=True, help_text="Operating agency")
     home_station = models.ForeignKey(
@@ -101,6 +141,18 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
     light_pattern = models.CharField(
         max_length=16, choices=LightPattern.choices, default=LightPattern.OFF
     )
+
+    # --- readiness (Driver module) -----------------------------------------
+    #: Fitness for dispatch, distinct from ``status`` which is what the
+    #: vehicle is *doing*. A vehicle can be AVAILABLE and NOT_READY at once.
+    #: Derived from the shift's inspection - see EquipmentCheck.
+    readiness = models.CharField(
+        max_length=20,
+        choices=VehicleReadiness.choices,
+        default=VehicleReadiness.UNCHECKED,
+        db_index=True,
+    )
+    readiness_updated_at = models.DateTimeField(null=True, blank=True)
 
     # --- capability / crew --------------------------------------------------
     is_als = models.BooleanField(default=False, verbose_name="Advanced Life Support")
@@ -206,8 +258,15 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
             "id": self.id,
             "uuid": str(self.uuid),
             "callsign": self.callsign,
+            "registration": self.registration,
             "vehicle_type": self.vehicle_type,
+            "vehicle_type_display": self.get_vehicle_type_display(),
+            "ownership": self.ownership,
+            "ownership_display": self.get_ownership_display(),
+            "operator": self.operator,
+            "is_als": self.is_als,
             "status": self.status,
+            "status_display": self.get_status_display(),
             "latitude": self.latitude,
             "longitude": self.longitude,
             "heading_deg": round(self.heading_deg, 1),
@@ -215,9 +274,68 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
             "priority_level": self.priority_level,
             "siren_mode": self.siren_mode,
             "light_pattern": self.light_pattern,
+            "readiness": self.readiness,
+            "readiness_display": self.get_readiness_display(),
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "is_stale": self.is_stale,
         }
+
+    def as_fleet_row(self) -> dict:
+        """One row of the admin fleet board.
+
+        Joins the four things an operations manager has to correlate by hand
+        otherwise: where the vehicle is, who is on it, what it is doing, and
+        whether it is fit to do it. Callers are expected to have
+        ``select_related``/``prefetch_related`` the shift and trip - this is
+        rendered for the whole fleet on a timer, and a lazy load per row is
+        an N+1 on the busiest screen in the system.
+        """
+        shift = next(
+            (s for s in self.shifts.all() if s.status in {"pending", "active"}), None
+        )
+        trip = self.active_trip
+        return {
+            **self.as_tracking_payload(),
+            # --- crew -------------------------------------------------------
+            "shift_status": shift.status if shift else "no_shift",
+            "shift_status_display": shift.get_status_display() if shift else "No crew signed on",
+            "driver_name": (
+                shift.driver.get_full_name() or shift.driver.get_username()
+            ) if shift else None,
+            "paramedic_name": (
+                shift.paramedic.get_full_name() or shift.paramedic.get_username()
+            ) if shift else None,
+            "on_duty_since": shift.accepted_at if shift else None,
+            # --- inspection -------------------------------------------------
+            "inspection_status": self._inspection_status(shift),
+            # --- current job ------------------------------------------------
+            "current_trip_reference": trip.reference if trip else None,
+            "current_emergency": trip.get_emergency_category_display() if trip else None,
+            "current_priority_level": trip.priority_level if trip else None,
+            "current_destination": (
+                trip.destination_hospital.name
+                if trip and trip.destination_hospital else None
+            ),
+            "current_eta": trip.eta if trip else None,
+            "updated_at": self.updated_at,
+        }
+
+    @staticmethod
+    def _inspection_status(shift) -> str:
+        """Plain words for the fleet board, not an enum the reader must decode."""
+        check = getattr(shift, "equipment_check", None) if shift else None
+        # A check row with nothing answered is "not started", not "in progress
+        # (0/21)" - the row is created with the shift, and reporting it as
+        # started would hide exactly the vehicles that owe an inspection.
+        if check is None or check.answered_count == 0 and not check.skipped:
+            return "not started"
+        if check.missing_critical:
+            return "failed"
+        if check.is_complete:
+            return "complete"
+        if check.skipped:
+            return "skipped - pending"
+        return f"in progress ({check.answered_count}/{len(EQUIPMENT_CATALOGUE)})"
 
 
 class VehicleTelemetry(models.Model):
@@ -254,3 +372,23 @@ class VehicleTelemetry(models.Model):
 
     def __str__(self) -> str:
         return f"{self.vehicle_id} @ {self.recorded_at:%H:%M:%S}"
+
+
+# ---------------------------------------------------------------------------
+# Crew takeover and the start-of-shift vehicle check.
+#   Kept in their own module for length, re-exported here so
+#   ``from apps.fleet.models import CrewShift`` works like every other model.
+# ---------------------------------------------------------------------------
+from apps.fleet.crew import (  # noqa: E402,F401  (circular-safe: crew imports no models)
+    CRITICAL_CODES,
+    EQUIPMENT_BY_CODE,
+    EQUIPMENT_CATALOGUE,
+    CrewShift,
+    EquipmentCheck,
+    failure_reasons_for,
+)
+from apps.fleet.maintenance import (  # noqa: E402,F401
+    BreakdownEvent,
+    MaintenanceReport,
+    TransferOffer,
+)

@@ -28,10 +28,21 @@ def make_user(username: str, *roles: str, **kwargs) -> User:
 # ---------------------------------------------------------------------------
 class RoleRegistryTests(TestCase):
     def test_legacy_group_names_still_resolve(self):
-        """An upgraded deployment keeps working before seed_users is re-run."""
-        legacy = make_user("legacy", "operators")
-        self.assertIn(Role.TRAFFIC_POLICE, user_roles(legacy))
-        self.assertTrue(has_role(legacy, Role.TRAFFIC_POLICE))
+        """An upgraded deployment keeps working before seed_users is re-run.
+
+        Checked on ``hospital`` -> ``hospital_staff``. This used to check
+        ``operators``, whose role (traffic police) has since been retired -
+        and with the role gone the alias resolves to nothing, which is the
+        correct outcome for a retired role but tests nothing about aliasing.
+        """
+        legacy = make_user("legacy", "hospital")
+        self.assertIn(Role.HOSPITAL, user_roles(legacy))
+        self.assertTrue(has_role(legacy, Role.HOSPITAL))
+
+    def test_a_retired_roles_group_grants_nothing(self):
+        """`operators` was traffic police. The role is gone; so is the grant."""
+        stale = make_user("stale_op", "operators")
+        self.assertEqual(user_roles(stale), set())
 
     def test_legacy_paramedics_group_resolves(self):
         crew = make_user("oldcrew", "paramedics")
@@ -41,7 +52,7 @@ class RoleRegistryTests(TestCase):
         root = make_user("root", is_superuser=True, is_staff=True)
         self.assertEqual(user_roles(root), set(user_roles(root)) | {Role.ADMIN})
         self.assertTrue(has_role(root, Role.HOSPITAL))
-        self.assertTrue(has_role(root, Role.TRAFFIC_POLICE))
+        self.assertTrue(has_role(root, Role.ADMIN))
 
     def test_anonymous_holds_no_roles(self):
         from django.contrib.auth.models import AnonymousUser
@@ -49,13 +60,19 @@ class RoleRegistryTests(TestCase):
         self.assertEqual(user_roles(AnonymousUser()), set())
         self.assertFalse(may_view_clinical_data(AnonymousUser()))
 
-    def test_traffic_police_have_no_clinical_clearance(self):
-        """Data minimisation: a corridor needs priority, not a diagnosis."""
-        police = make_user("cop", Role.TRAFFIC_POLICE)
-        self.assertFalse(may_view_clinical_data(police))
+    def test_a_role_without_clinical_clearance_is_refused(self):
+        """Data minimisation still has teeth after the role retirement.
+
+        This used to check the traffic police, whose whole point was holding
+        operational authority without clinical access. That role is gone, so
+        the property is pinned on the public role instead - otherwise nothing
+        would be asserting that `clinical_access=False` means anything.
+        """
+        road_user = make_user("uncleared", Role.PUBLIC)
+        self.assertFalse(may_view_clinical_data(road_user))
 
     def test_clinical_roles_have_clearance(self):
-        for role in (Role.HOSPITAL, Role.AMBULANCE, Role.DISPATCHER):
+        for role in (Role.HOSPITAL, Role.AMBULANCE, Role.ADMIN):
             user = make_user(f"u-{role}", role)
             self.assertTrue(may_view_clinical_data(user), role)
 
@@ -164,9 +181,8 @@ class RBACMatrixTests(TestCase):
     def setUpTestData(cls):
         cls.users = {
             "admin": make_user("m_admin", Role.ADMIN, is_staff=True, is_superuser=True),
-            "police": make_user("m_police", Role.TRAFFIC_POLICE),
-            "dispatcher": make_user("m_dispatch", Role.DISPATCHER),
             "crew": make_user("m_crew", Role.AMBULANCE),
+            "medic": make_user("m_medic", Role.PARAMEDIC),
             "hospital": make_user("m_hosp", Role.HOSPITAL),
             "public": make_user("m_public", Role.PUBLIC),
         }
@@ -181,18 +197,18 @@ class RBACMatrixTests(TestCase):
     #: public GIS layers, all asserted in test_public_endpoints_remain_anonymous.
     MATRIX = [
         ("read trips", "get", "/api/v1/dispatch/trips/live/",
-         {"admin", "police", "dispatcher", "crew", "hospital"}),
-        ("corridor tick", "post", "/api/v1/dispatch/corridor/tick/", {"admin", "police"}),
-        ("rebuild graph", "post", "/api/v1/brain/network/rebuild/", {"admin", "police"}),
+         {"admin", "crew", "medic", "hospital"}),
+        ("corridor tick", "post", "/api/v1/dispatch/corridor/tick/", {"admin"}),
+        ("rebuild graph", "post", "/api/v1/brain/network/rebuild/", {"admin"}),
         ("recompute hotspots", "post", "/api/v1/analytics/accident-hotspots/recompute/",
-         {"admin", "police"}),
+         {"admin"}),
         ("analytics summary", "get", "/api/v1/analytics/summary/",
-         {"admin", "police", "dispatcher", "crew", "hospital"}),
+         {"admin", "crew", "medic", "hospital"}),
         # The full alert table, carrying trip ids. The road-user surface is
         # /alerts/nearby/, which takes a position and returns only what is
         # approaching it.
         ("driver alert list", "get", "/api/v1/alerts/driver-alerts/",
-         {"admin", "police", "dispatcher", "crew", "hospital"}),
+         {"admin", "crew", "medic", "hospital"}),
     ]
 
     def _call(self, method, url, user=None):
@@ -270,23 +286,44 @@ class ClinicalRedactionTests(TestCase):
         )
 
     def test_clinical_roles_see_patient_data(self):
-        for role in (Role.HOSPITAL, Role.AMBULANCE, Role.DISPATCHER):
+        for role in (Role.HOSPITAL, Role.AMBULANCE, Role.ADMIN):
             with self.subTest(role=role):
                 payload = self._trip_payload(make_user(f"c-{role}", role))
                 self.assertEqual(payload["patient_age"], 57)
                 self.assertIn("Chest pain", payload["patient_notes"])
                 self.client.logout()
 
-    def test_traffic_police_get_redacted_patient_data(self):
-        payload = self._trip_payload(make_user("phi-cop", Role.TRAFFIC_POLICE))
+    def _serialise_for(self, user):
+        """Serialise the trip as ``user`` would see it.
+
+        Exercised at the serializer rather than over HTTP, because after the
+        traffic-police and dispatcher roles were retired there is no longer a
+        role that can *reach* this endpoint without clinical clearance - every
+        remaining operational role is cleared, and the public role is refused
+        outright. The redaction code is still live and still has to be
+        correct: an uncleared or unattributed serialisation must fail closed,
+        and that is what this pins.
+        """
+        from apps.dispatch.serializers import EmergencyTripSerializer
+
+        return EmergencyTripSerializer(self.trip, context={"user": user}).data
+
+    def test_an_uncleared_caller_gets_redacted_patient_data(self):
+        payload = self._serialise_for(make_user("phi-uncleared", Role.PUBLIC))
         self.assertIsNone(payload["patient_age"])
         self.assertIsNone(payload["patient_notes"])
         self.assertIsNone(payload["caller_number"])
         self.assertTrue(payload["clinical_data_redacted"])
 
+    def test_an_unattributed_serialisation_fails_closed(self):
+        """No user in context at all must redact, not expose."""
+        payload = self._serialise_for(None)
+        self.assertIsNone(payload["patient_notes"])
+        self.assertTrue(payload["clinical_data_redacted"])
+
     def test_redaction_keeps_operational_fields(self):
         """Redaction must not break the corridor: priority and position stay."""
-        payload = self._trip_payload(make_user("phi-cop2", Role.TRAFFIC_POLICE))
+        payload = self._serialise_for(make_user("phi-uncleared2", Role.PUBLIC))
         self.assertEqual(payload["reference"], self.trip.reference)
         self.assertEqual(payload["priority_level"], self.trip.priority_level)
         self.assertIsNotNone(payload["vehicle_latitude"])

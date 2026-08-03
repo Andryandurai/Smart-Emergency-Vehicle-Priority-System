@@ -30,6 +30,9 @@ function trip(id: number, level: 1 | 2 | 3 | 4): Trip {
     priority_level: level, siren_mode: "continuous", light_pattern: "max",
     eta: null, distance_remaining_m: 1200, active_route: null,
     patient_age: null, patient_notes: null, patient_deteriorating: null,
+    symptoms: null, symptom_labels: null,
+    hospital_choice_reason: "recommended", choice_reason_display: "Followed the recommendation",
+    hospital_choice_note: "",
     incident_address: null, caller_number: null,
     response_time_s: null, transport_time_s: null, created_at: "",
   };

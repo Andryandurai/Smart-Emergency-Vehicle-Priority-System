@@ -22,7 +22,7 @@ from apps.core.enums import (
     TripStage,
     VehicleStatus,
 )
-from apps.hospitals.rules import resolve_rule
+from apps.hospitals.rules import resolve_rule_for
 
 log = logging.getLogger("sevps.dispatch.siren")
 
@@ -109,7 +109,14 @@ def derive_priority(trip) -> tuple[int, str]:
     Returns ``(level, trigger)``.  The trigger string is stored on the
     directive so the reason for every change is visible after the fact.
     """
-    rule = resolve_rule(trip.emergency_category)
+    # Resolved with the crew's observations, not the category alone. An
+    # unconscious, bleeding patient recorded under "Undetermined" - which is
+    # the correct entry for a crew who cannot yet name the presentation - was
+    # otherwise dispatched at the undetermined rule's Level 3, so no green
+    # corridor and no siren for a patient the crew had already described as
+    # critical. The observations are the evidence; ignoring them here made
+    # Layer 6 the one part of the platform that did not listen to them.
+    rule = resolve_rule_for(trip.emergency_category, trip.symptoms)
     base = rule.priority_level
 
     # Before a patient is on board there is no clinical severity to act on -

@@ -8,6 +8,7 @@ from apps.core.auth_views import (
     RoleCatalogueView,
     WhoAmIView,
 )
+from apps.core.profile_views import DemoAccountsView, MyAvatarView, MyProfileView
 from apps.core.jwt import (
     SEVPSTokenObtainPairView,
     SEVPSTokenRefreshView,
@@ -24,6 +25,9 @@ auth_patterns = [
     path("jwt/verify/", SEVPSTokenVerifyView.as_view(), name="jwt-verify"),
     path("jwt/logout/", LogoutView.as_view(), name="jwt-logout"),
     path("me/", WhoAmIView.as_view(), name="auth-me"),
+    path("profile/", MyProfileView.as_view(), name="auth-profile"),
+    path("profile/avatar/", MyAvatarView.as_view(), name="auth-profile-avatar"),
+    path("demo-accounts/", DemoAccountsView.as_view(), name="auth-demo-accounts"),
     path("roles/", RoleCatalogueView.as_view(), name="auth-roles"),
     path("policy/", AccessPolicyView.as_view(), name="auth-policy"),
     # Deprecated: legacy DRF token issuance. Scheduled for removal once all

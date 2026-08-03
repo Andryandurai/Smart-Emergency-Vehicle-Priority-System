@@ -12,7 +12,9 @@ from django.utils import timezone
 
 from apps.core.enums import (
     EmergencyCategory,
+    HospitalChoiceReason,
     LightPattern,
+    PatientSymptom,
     PreemptionState,
     PriorityLevel,
     SirenMode,
@@ -60,6 +62,12 @@ class EmergencyTrip(TimeStampedModel, UUIDModel):
     patient_age = models.PositiveSmallIntegerField(null=True, blank=True)
     patient_notes = models.TextField(blank=True)
     patient_deteriorating = models.BooleanField(default=False)
+    #: Observed symptoms - PatientSymptom codes. Recorded alongside the
+    #: category rather than instead of it: they are what the crew can see, and
+    #: they are what the receiving hospital most wants in advance. When the
+    #: category is UNDETERMINED these drive hospital matching on their own -
+    #: see apps/hospitals/symptoms.py.
+    symptoms = models.JSONField(default=list, blank=True)
     #: Recorded whenever the crew re-triages, so Layer 6 can react.
     condition_updated_at = models.DateTimeField(null=True, blank=True)
 
@@ -71,6 +79,15 @@ class EmergencyTrip(TimeStampedModel, UUIDModel):
     destination_latitude = models.FloatField(null=True, blank=True)
     destination_longitude = models.FloatField(null=True, blank=True)
     hospital_was_overridden = models.BooleanField(default=False)
+    #: Why this hospital. Separates "the crew disagreed with the engine" from
+    #: "the patient exercised their right to choose", which review must not
+    #: conflate - see HospitalChoiceReason.
+    hospital_choice_reason = models.CharField(
+        max_length=20,
+        choices=HospitalChoiceReason.choices,
+        default=HospitalChoiceReason.RECOMMENDED,
+    )
+    hospital_choice_note = models.CharField(max_length=300, blank=True)
 
     # --- Layer 6 -----------------------------------------------------------
     priority_level = models.PositiveSmallIntegerField(
@@ -219,6 +236,17 @@ class EmergencyTrip(TimeStampedModel, UUIDModel):
             return (end - self.dispatched_at).total_seconds()
         return None
 
+    @property
+    def symptom_labels(self) -> list[str]:
+        """Human-readable symptom names, in catalogue order.
+
+        Ordered by the enum rather than by however the client happened to
+        send them, so the same set of observations always reads the same way
+        on the hospital board.
+        """
+        selected = set(self.symptoms or [])
+        return [label for value, label in PatientSymptom.choices if value in selected]
+
     def as_hospital_payload(self) -> dict:
         """Exactly the fields the Hospital Preparedness Dashboard shows."""
         vehicle = self.vehicle
@@ -232,6 +260,13 @@ class EmergencyTrip(TimeStampedModel, UUIDModel):
             "speed_kmh": round(vehicle.speed_kmh, 1),
             "emergency_category": self.emergency_category,
             "emergency_category_display": self.get_emergency_category_display(),
+            # The observations the crew recorded. This is the single most
+            # useful thing the receiving team can have before the doors open:
+            # "unconscious, bleeding" lets them call the trauma bay and cross
+            # match blood while the ambulance is still moving, where a bare
+            # category of "Undetermined" tells them nothing to act on.
+            "symptoms": list(self.symptoms or []),
+            "symptom_labels": self.symptom_labels,
             "priority_level": self.priority_level,
             "stage": self.stage,
             "stage_display": self.get_stage_display(),

@@ -88,3 +88,10 @@ class GeoPointModel(models.Model):
             "geometry": {"type": "Point", "coordinates": [self.longitude, self.latitude]},
             "properties": properties or {},
         }
+
+
+# ---------------------------------------------------------------------------
+# Staff identity. Re-exported so ``from apps.core.models import StaffProfile``
+# works like every other model in the project.
+# ---------------------------------------------------------------------------
+from apps.core.profiles import StaffProfile  # noqa: E402,F401

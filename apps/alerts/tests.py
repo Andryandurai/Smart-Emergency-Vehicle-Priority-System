@@ -23,8 +23,13 @@ class MessageTests(TestCase):
         self.assertEqual(instruction, "Please move to the left lane")
 
     def test_vehicle_type_is_named_correctly(self):
+        message, _ = build_message(20, PriorityLevel.CRITICAL, "disaster")
+        self.assertIn("Emergency Unit", message)
+
+    def test_an_unknown_vehicle_type_still_warns_the_driver(self):
+        """A retired type must not leave a road user with no message at all."""
         message, _ = build_message(20, PriorityLevel.CRITICAL, "fire_engine")
-        self.assertIn("Fire Engine", message)
+        self.assertIn("Emergency Vehicle Approaching", message)
 
     def test_seconds_are_rounded_for_display(self):
         message, _ = build_message(29.6, PriorityLevel.HIGH, "ambulance")

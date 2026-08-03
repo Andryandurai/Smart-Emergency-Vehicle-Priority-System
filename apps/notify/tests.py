@@ -141,7 +141,7 @@ class SubscribeEndpointTests(TestCase):
         self.assertEqual(subscription.failure_count, 0)
 
     def test_signed_in_subscription_is_attached_to_the_user(self):
-        user = make_user("controller", Role.TRAFFIC_POLICE)
+        user = make_user("controller", Role.ADMIN)
         self.client.force_login(user)
         self.client.post(
             "/api/v1/notify/subscribe/",
@@ -181,7 +181,7 @@ class SubscribeEndpointTests(TestCase):
 
     def test_endpoint_is_never_returned_in_full(self):
         """It is a bearer capability: anyone holding it can push to that browser."""
-        user = make_user("op1", Role.DISPATCHER)
+        user = make_user("op1", Role.ADMIN)
         make_subscription(user)
         self.client.force_login(user)
         body = self.client.get("/api/v1/notify/subscriptions/").json()
@@ -190,9 +190,9 @@ class SubscribeEndpointTests(TestCase):
         self.assertIn("...", body["subscriptions"][0]["endpoint_hint"])
 
     def test_subscriptions_are_scoped_to_the_caller(self):
-        other = make_user("other", Role.DISPATCHER)
+        other = make_user("other", Role.ADMIN)
         make_subscription(other, endpoint="https://push.example.org/send/other")
-        mine = make_user("mine", Role.DISPATCHER)
+        mine = make_user("mine", Role.ADMIN)
         make_subscription(mine)
 
         self.client.force_login(mine)
@@ -204,7 +204,7 @@ class AudienceTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.hospital = make_user("nurse", Role.HOSPITAL)
-        cls.police = make_user("police", Role.TRAFFIC_POLICE)
+        cls.police = make_user("police", Role.ADMIN)
         make_subscription(cls.hospital, endpoint="https://push.example.org/hospital")
         make_subscription(cls.police, endpoint="https://push.example.org/police")
 
@@ -217,12 +217,17 @@ class AudienceTests(TestCase):
         self.assertEqual(len(targets), 2)
 
     def test_legacy_group_names_still_resolve(self):
-        """A deployment upgrading from `operators` must keep receiving alerts."""
-        self.assertIn("operators", group_names_for(Role.TRAFFIC_POLICE))
-        legacy = make_user("legacy_op", "operators")
+        """A deployment upgrading from an old group name must keep receiving.
+
+        This used to check ``operators``, which aliased the traffic police.
+        That role is retired and its alias with it, so the property is pinned
+        on ``hospital`` -> ``hospital_staff``, which is still live.
+        """
+        self.assertIn("hospital", group_names_for(Role.HOSPITAL))
+        legacy = make_user("legacy_ward", "hospital")
         make_subscription(legacy, endpoint="https://push.example.org/legacy")
 
-        targets = service.resolve_audience({"audience": [Role.TRAFFIC_POLICE]})
+        targets = service.resolve_audience({"audience": [Role.HOSPITAL]})
         self.assertIn(legacy, [t.user for t in targets])
 
     def test_superusers_receive_everything(self):
@@ -239,7 +244,7 @@ class AudienceTests(TestCase):
 
     def test_retired_subscriptions_are_not_targeted(self):
         PushSubscription.objects.filter(user=self.police).update(is_active=False)
-        targets = service.resolve_audience({"audience": [Role.TRAFFIC_POLICE]})
+        targets = service.resolve_audience({"audience": [Role.ADMIN]})
         self.assertEqual(targets, [])
 
     def test_driver_audience_is_matched_by_cell(self):
@@ -251,12 +256,12 @@ class AudienceTests(TestCase):
 
 class DeliveryTests(TestCase):
     def setUp(self):
-        self.user = make_user("dispatcher", Role.DISPATCHER)
+        self.user = make_user("dispatcher", Role.ADMIN)
         self.subscription = make_subscription(self.user)
         self.record = NotificationRecord.objects.create(
             title="Inbound Level 1", body="Ambulance en route.",
             severity=Severity.CRITICAL, category=NotificationCategory.INBOUND_PATIENT,
-            audience=[Role.DISPATCHER],
+            audience=[Role.ADMIN],
         )
 
     def deliver_with(self, backend):
@@ -316,7 +321,7 @@ class DeliveryTests(TestCase):
     def test_fanout_is_capped(self):
         for index in range(3):
             make_subscription(
-                make_user(f"bulk{index}", Role.DISPATCHER),
+                make_user(f"bulk{index}", Role.ADMIN),
                 endpoint=f"https://push.example.org/bulk{index}",
             )
         with patch.object(service, "MAX_FANOUT", 2):
@@ -334,17 +339,29 @@ class DeliveryTests(TestCase):
 
 class PayloadTests(TestCase):
     def test_push_payload_carries_no_clinical_or_internal_context(self):
-        """The relay is a third party and the device may be unlocked."""
+        """The relay is a third party and the device may be unlocked.
+
+        Checked field by field rather than by searching the stringified
+        payload. The payload legitimately contains a random UUID and an ISO
+        timestamp, and a bare substring search for a short number matches
+        those by coincidence - "61" appears in roughly one UUID in ten, which
+        made this test fail about that often for reasons having nothing to do
+        with what it was testing.
+        """
         record = NotificationRecord.objects.create(
             title="Inbound", body="Priority 1", severity=Severity.CRITICAL,
             context={"patient_age": 61, "patient_notes": "confidential", "trip_id": 7},
         )
         payload = service.push_payload(record)
-        serialised = str(payload)
-        self.assertNotIn("61", serialised)
-        self.assertNotIn("confidential", serialised)
+
         self.assertNotIn("context", payload)
         self.assertIn("title", payload)
+        # Nothing from the context may reach the wire, through any field.
+        for field in ("title", "body", "link", "category", "dedupe_key"):
+            value = str(payload.get(field, ""))
+            self.assertNotIn("confidential", value)
+            self.assertNotIn("61", value)
+            self.assertNotIn("patient", value.lower())
 
     def test_dedupe_key_defaults_to_the_uuid(self):
         """The service worker collapses on tag; an empty tag would merge
@@ -424,7 +441,7 @@ class IntegrationTests(TestCase):
                 title="Signal preemption failed at TSC-9",
                 body="Junction stays on normal timing.",
                 severity=Severity.WARNING,
-                audience=(Role.TRAFFIC_POLICE,),
+                audience=(Role.ADMIN,),
                 dedupe_key="corridor-fail:1:TSC-9",
             )
         )
@@ -496,9 +513,9 @@ class InboxTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.nurse = make_user("nurse3", Role.HOSPITAL)
-        cls.police = make_user("police3", Role.TRAFFIC_POLICE)
+        cls.police = make_user("police3", Role.ADMIN)
         NotificationRecord.objects.create(title="For hospitals", audience=[Role.HOSPITAL])
-        NotificationRecord.objects.create(title="For police", audience=[Role.TRAFFIC_POLICE])
+        NotificationRecord.objects.create(title="For police", audience=[Role.ADMIN])
         NotificationRecord.objects.create(title="For everyone", audience=[])
 
     def test_inbox_filters_by_role(self):
@@ -543,7 +560,7 @@ class InboxTests(TestCase):
 
 class HealthAndTestSendTests(TestCase):
     def setUp(self):
-        self.user = make_user("op9", Role.DISPATCHER)
+        self.user = make_user("op9", Role.ADMIN)
         self.client.force_login(self.user)
 
     def test_health_reports_unconfigured_push_as_such(self):
@@ -564,7 +581,7 @@ class HealthAndTestSendTests(TestCase):
 
     def test_test_send_only_reaches_the_caller(self):
         make_subscription(self.user)
-        other = make_user("other9", Role.DISPATCHER)
+        other = make_user("other9", Role.ADMIN)
         make_subscription(other, endpoint="https://push.example.org/other9")
 
         backend = FakeBackend()
@@ -581,7 +598,7 @@ class HealthAndTestSendTests(TestCase):
 
 class PruneTests(TestCase):
     def test_long_silent_subscriptions_are_retired(self):
-        user = make_user("stale", Role.DISPATCHER)
+        user = make_user("stale", Role.ADMIN)
         subscription = make_subscription(user)
         PushSubscription.objects.filter(pk=subscription.pk).update(
             last_success_at=timezone.now() - timezone.timedelta(days=120)
@@ -591,14 +608,14 @@ class PruneTests(TestCase):
         self.assertFalse(subscription.is_active)
 
     def test_recently_active_subscriptions_survive(self):
-        user = make_user("fresh", Role.DISPATCHER)
+        user = make_user("fresh", Role.ADMIN)
         subscription = make_subscription(user)
         subscription.record_success()
         self.assertEqual(service.prune_dead_subscriptions(60), 0)
 
     def test_a_never_delivered_subscription_is_not_pruned(self):
         """A browser that subscribed an hour ago has no success timestamp yet."""
-        make_subscription(make_user("new", Role.DISPATCHER))
+        make_subscription(make_user("new", Role.ADMIN))
         self.assertEqual(service.prune_dead_subscriptions(60), 0)
 
 

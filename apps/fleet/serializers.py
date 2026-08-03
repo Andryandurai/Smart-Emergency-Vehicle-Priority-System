@@ -11,6 +11,7 @@ class StationSerializer(serializers.ModelSerializer):
 
 class EmergencyVehicleSerializer(serializers.ModelSerializer):
     vehicle_type_display = serializers.CharField(source="get_vehicle_type_display", read_only=True)
+    ownership_display = serializers.CharField(source="get_ownership_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     is_stale = serializers.BooleanField(read_only=True)
     home_station_name = serializers.CharField(source="home_station.name", read_only=True, default=None)
@@ -20,6 +21,7 @@ class EmergencyVehicleSerializer(serializers.ModelSerializer):
         model = EmergencyVehicle
         fields = [
             "id", "uuid", "callsign", "registration", "vehicle_type", "vehicle_type_display",
+            "ownership", "ownership_display",
             "operator", "home_station", "home_station_name", "status", "status_display",
             "latitude", "longitude", "heading_deg", "speed_kmh", "accuracy_m",
             "last_seen_at", "is_stale", "priority_level", "siren_mode", "light_pattern",

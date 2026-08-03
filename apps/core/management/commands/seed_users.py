@@ -31,35 +31,158 @@ DEMO_USERS = [
         "is_superuser": True,
         "groups": [Role.ADMIN],
     },
-    {
-        "username": "police",
-        "password": "sevps-police",
-        "email": "police@sevps.local",
-        "first_name": "Traffic",
-        "last_name": "Police",
-        "is_staff": False,
-        "is_superuser": False,
-        "groups": [Role.TRAFFIC_POLICE],
-    },
-    {
-        "username": "dispatcher",
-        "password": "sevps-dispatcher",
-        "email": "dispatcher@sevps.local",
-        "first_name": "Emergency",
-        "last_name": "Dispatcher",
-        "is_staff": False,
-        "is_superuser": False,
-        "groups": [Role.DISPATCHER],
-    },
+    # --- Paramedics -------------------------------------------------------
+    # Several, because a shift is a pairing and a driver has to be able to
+    # pick *which* paramedic they are crewing with. One demo paramedic makes
+    # the crew directory a formality rather than a choice.
     {
         "username": "paramedic",
         "password": "sevps-paramedic",
         "email": "paramedic@sevps.local",
-        "first_name": "Ambulance",
-        "last_name": "Crew",
+        "first_name": "Anita",
+        "last_name": "Raman",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.PARAMEDIC],
+        "profile": {
+            "staff_id": "PM-1041",
+            "qualification": "Advanced Life Support Paramedic",
+            "base_station": "Chennai Central Ambulance Base",
+            "phone": "+91 98400 11041",
+            "blood_group": "O+",
+            "emergency_contact": "R. Raman +91 98400 22041",
+        },
+    },
+    {
+        "username": "paramedic2",
+        "password": "sevps-paramedic2",
+        "email": "paramedic2@sevps.local",
+        "first_name": "Vikram",
+        "last_name": "Iyer",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.PARAMEDIC],
+        "profile": {
+            "staff_id": "PM-1058",
+            "qualification": "Emergency Medical Technician - Advanced",
+            "base_station": "Adyar Response Station",
+            "phone": "+91 98400 11058",
+            "blood_group": "B+",
+            "emergency_contact": "S. Iyer +91 98400 22058",
+        },
+    },
+    {
+        "username": "paramedic3",
+        "password": "sevps-paramedic3",
+        "email": "paramedic3@sevps.local",
+        "first_name": "Fathima",
+        "last_name": "Basheer",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.PARAMEDIC],
+        "profile": {
+            "staff_id": "PM-1073",
+            "qualification": "Critical Care Paramedic",
+            "base_station": "Kilpauk Emergency Station",
+            "phone": "+91 98400 11073",
+            "blood_group": "A-",
+            "emergency_contact": "N. Basheer +91 98400 22073",
+        },
+    },
+    {
+        "username": "paramedic4",
+        "password": "sevps-paramedic4",
+        "email": "paramedic4@sevps.local",
+        "first_name": "Joseph",
+        "last_name": "Fernandes",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.PARAMEDIC],
+        "profile": {
+            "staff_id": "PM-1090",
+            "qualification": "Emergency Medical Technician - Basic",
+            "base_station": "Guindy Fire Station",
+            "phone": "+91 98400 11090",
+            "blood_group": "AB+",
+            "emergency_contact": "M. Fernandes +91 98400 22090",
+        },
+    },
+    {
+        # A second crew account, because a shift takeover is a handshake
+        # between two people and cannot be demonstrated - or tested against a
+        # running system - with only one.  Driver and paramedic are seats on a
+        # shift rather than separate roles: the same person drives on Monday
+        # and attends on Tuesday.
+        "username": "driver",
+        "password": "sevps-driver",
+        "email": "driver@sevps.local",
+        "first_name": "Suresh",
+        "last_name": "Kumar",
         "is_staff": False,
         "is_superuser": False,
         "groups": [Role.AMBULANCE],
+        "profile": {
+            "staff_id": "DR-2014",
+            "qualification": "Emergency Vehicle Operator - Class A",
+            "base_station": "Chennai Central Ambulance Base",
+            "phone": "+91 98400 32014",
+            "blood_group": "O-",
+            "emergency_contact": "L. Kumar +91 98400 42014",
+        },
+    },
+    {
+        "username": "driver2",
+        "password": "sevps-driver2",
+        "email": "driver2@sevps.local",
+        "first_name": "Mohan",
+        "last_name": "Rajan",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.AMBULANCE],
+        "profile": {
+            "staff_id": "DR-2031",
+            "qualification": "Emergency Vehicle Operator - Class A",
+            "base_station": "Adyar Response Station",
+            "phone": "+91 98400 32031",
+            "blood_group": "B-",
+            "emergency_contact": "P. Rajan +91 98400 42031",
+        },
+    },
+    {
+        "username": "driver3",
+        "password": "sevps-driver3",
+        "email": "driver3@sevps.local",
+        "first_name": "Karthik",
+        "last_name": "Selvam",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.AMBULANCE],
+        "profile": {
+            "staff_id": "DR-2047",
+            "qualification": "Emergency Vehicle Operator - Class B",
+            "base_station": "Kilpauk Emergency Station",
+            "phone": "+91 98400 32047",
+            "blood_group": "A+",
+            "emergency_contact": "D. Selvam +91 98400 42047",
+        },
+    },
+    {
+        "username": "driver4",
+        "password": "sevps-driver4",
+        "email": "driver4@sevps.local",
+        "first_name": "Imran",
+        "last_name": "Sheikh",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.AMBULANCE],
+        "profile": {
+            "staff_id": "DR-2062",
+            "qualification": "Emergency Vehicle Operator - Class A",
+            "base_station": "Guindy Fire Station",
+            "phone": "+91 98400 32062",
+            "blood_group": "O+",
+            "emergency_contact": "H. Sheikh +91 98400 42062",
+        },
     },
     {
         "username": "hospital",
@@ -80,18 +203,6 @@ DEMO_USERS = [
         "is_staff": False,
         "is_superuser": False,
         "groups": [Role.PUBLIC],
-    },
-    # Retained so the pre-RBAC demo account keeps working after upgrade; it
-    # maps onto the traffic police role via the legacy `operators` alias.
-    {
-        "username": "operator",
-        "password": "sevps-operator",
-        "email": "operator@sevps.local",
-        "first_name": "Control",
-        "last_name": "Room",
-        "is_staff": False,
-        "is_superuser": False,
-        "groups": [Role.TRAFFIC_POLICE],
     },
 ]
 
@@ -192,6 +303,18 @@ class Command(BaseCommand):
             user.save()
 
             user.groups.set(Group.objects.filter(name__in=spec["groups"]))
+
+            # Identity details. Updated rather than only created, so editing
+            # the spec and re-seeding actually corrects the roster - but the
+            # avatar is never touched, because a crew member who uploaded
+            # their own photograph should not lose it to a seed run.
+            if spec.get("profile"):
+                from apps.core.profiles import StaffProfile
+
+                StaffProfile.objects.update_or_create(
+                    user=user, defaults=spec["profile"]
+                )
+
             rows.append((spec, user, created))
 
         self._report(rows, options["keep_passwords"])

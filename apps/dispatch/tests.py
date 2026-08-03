@@ -78,6 +78,27 @@ class SirenPolicyTests(TestCase):
         level, _ = derive_priority(self.trip)
         self.assertEqual(level, PriorityLevel.NON_CRITICAL)
 
+    def test_observed_symptoms_drive_priority_when_the_category_is_unknown(self):
+        """A crew who cannot name the presentation still gets a corridor.
+
+        "Undetermined" is the correct entry for a crew facing an unresponsive
+        patient with no history, and its rule is deliberately Level 3. Left
+        there, an unconscious and bleeding patient would travel without siren
+        or signal priority because the crew was honest about not having a
+        diagnosis. The observations they *did* record must count.
+        """
+        self.trip.emergency_category = "unknown"
+        self.trip.symptoms = ["unconscious", "bleeding"]
+        level, _ = derive_priority(self.trip)
+        self.assertEqual(level, PriorityLevel.CRITICAL)
+
+    def test_symptoms_never_soften_a_categorys_priority(self):
+        """Escalation only - a fever alongside a cardiac call is still Level 1."""
+        self.trip.emergency_category = "cardiac"
+        self.trip.symptoms = ["fever"]
+        level, _ = derive_priority(self.trip)
+        self.assertEqual(level, PriorityLevel.CRITICAL)
+
     def test_apply_priority_writes_a_directive_and_mirrors_to_vehicle(self):
         directive = apply_priority(self.trip, trigger="test", force=True)
         self.vehicle.refresh_from_db()

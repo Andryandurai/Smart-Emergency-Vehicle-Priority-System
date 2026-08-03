@@ -16,7 +16,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from apps.core.enums import TripStage, VehicleStatus
+from apps.core.enums import HospitalChoiceReason, TripStage, VehicleStatus
 from apps.core.geo import Point
 from apps.core.realtime import broadcast, broadcast_ops, hospital_group, vehicle_group
 from apps.dispatch.models import EmergencyTrip, RoutePlan
@@ -76,12 +76,18 @@ def assign_hospital(
     hospital=None,
     emergency_category: str | None = None,
     override_reason: str = "",
+    choice_reason: str | None = None,
     recompute_route: bool = True,
 ) -> dict:
     """Run Layer 5 and commit the destination.
 
     When ``hospital`` is given it is treated as a crew override: the
     recommendation still runs and is logged, so the divergence is on record.
+
+    ``choice_reason`` says *why* a given hospital was chosen. A patient
+    exercising their right to pick where they are treated is not the crew
+    disagreeing with the engine, and review must be able to tell the two
+    apart - see :class:`~apps.core.enums.HospitalChoiceReason`.
     """
     from apps.hospitals.models import HospitalRecommendationLog
     from apps.hospitals.recommender import recommend_hospital
@@ -93,7 +99,10 @@ def assign_hospital(
 
     origin = trip.incident_point or trip.vehicle.point
     recommendation = recommend_hospital(
-        origin, trip.emergency_category, priority_level=trip.priority_level
+        origin,
+        trip.emergency_category,
+        priority_level=trip.priority_level,
+        symptoms=trip.symptoms,
     )
 
     chosen = hospital or recommendation.recommended
@@ -119,16 +128,24 @@ def assign_hospital(
     trip.destination_hospital = chosen
     trip.destination_latitude = chosen.latitude
     trip.destination_longitude = chosen.longitude
-    trip.hospital_was_overridden = bool(
+    is_override = bool(
         hospital and recommendation.recommended and hospital.id != recommendation.recommended.id
     )
+    trip.hospital_was_overridden = is_override
+    if choice_reason:
+        trip.hospital_choice_reason = choice_reason
+    elif not is_override:
+        trip.hospital_choice_reason = HospitalChoiceReason.RECOMMENDED
+    trip.hospital_choice_note = override_reason
+
     if trip.stage in {TripStage.CREATED, TripStage.TO_SCENE, TripStage.ON_SCENE}:
         trip.stage = TripStage.TO_HOSPITAL
         trip.departed_scene_at = trip.departed_scene_at or timezone.now()
     trip.save(
         update_fields=[
             "destination_hospital", "destination_latitude", "destination_longitude",
-            "hospital_was_overridden", "stage", "departed_scene_at", "updated_at",
+            "hospital_was_overridden", "hospital_choice_reason", "hospital_choice_note",
+            "stage", "departed_scene_at", "updated_at",
         ]
     )
 
@@ -145,7 +162,9 @@ def assign_hospital(
             reason=f"transport to {chosen.name}",
         )
 
-    notify_hospital(trip, message="Inbound patient - pre-arrival notification")
+    # No explicit message: let _prearrival_summary lead with the observed
+    # symptoms, which is what the receiving team can actually act on.
+    notify_hospital(trip)
 
     payload = {
         **_trip_event_payload(trip),
@@ -370,6 +389,25 @@ def advance_stage(trip, stage: str, *, reason: str = "") -> EmergencyTrip:
     return trip
 
 
+def _prearrival_summary(trip) -> str:
+    """One line the charge nurse can act on without opening anything.
+
+    Leads with the observations rather than the category: "Unconscious,
+    Bleeding" tells a receiving team to call the trauma bay, where
+    "Undetermined" - which is what an unsure crew correctly selects - tells
+    them nothing at all.
+    """
+    parts = [trip.get_emergency_category_display()]
+    labels = trip.symptom_labels
+    if labels:
+        parts.append(", ".join(labels))
+    if trip.patient_deteriorating:
+        parts.append("DETERIORATING")
+    if trip.patient_age is not None:
+        parts.append(f"age {trip.patient_age}")
+    return "Inbound: " + " · ".join(parts)
+
+
 def notify_hospital(trip, *, message: str = "", live_update: bool = False) -> dict | None:
     """Push the pre-arrival packet to the receiving hospital (Layer 5 / 4.7)."""
     from apps.hospitals.models import HospitalAlert
@@ -391,10 +429,11 @@ def notify_hospital(trip, *, message: str = "", live_update: bool = False) -> di
         hospital=hospital,
         trip=trip,
         emergency_category=trip.emergency_category,
+        symptoms=list(trip.symptoms or []),
         priority_level=trip.priority_level,
         eta=trip.eta,
         distance_remaining_m=trip.distance_remaining_m,
-        message=message or "Inbound emergency patient",
+        message=message or _prearrival_summary(trip),
     )
     alert_payload = HospitalAlertSerializer(alert).data
     broadcast(hospital_group(hospital.code), "hospital_alert", alert_payload)

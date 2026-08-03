@@ -250,6 +250,27 @@ def blocked_segment_ids() -> set[int]:
     return blocked
 
 
+def congested_segment_ids(threshold: float = 0.55) -> set[int]:
+    """Segments moving badly enough to be worth routing around.
+
+    Distinct from :func:`blocked_segment_ids`: these are passable, so they are
+    never excluded from the graph - they only make the router reconsider. The
+    default threshold is the boundary between ``moderate`` and ``heavy`` in
+    :class:`~apps.core.enums.CongestionLevel`, so "heavy congestion ahead" in
+    the operator's language means the same thing here as on the map.
+    """
+    from apps.network.models import RoadSegment
+
+    # Strictly greater, because CongestionLevel.from_ratio puts the boundary
+    # itself on the moderate side (``ratio >= 0.45`` is still MODERATE). A
+    # segment the platform calls moderate must not trigger a reroute.
+    return set(
+        RoadSegment.objects.filter(
+            is_open=True, congestion_index__gt=threshold
+        ).values_list("id", flat=True)
+    )
+
+
 def build_forecaster(departure=None, segment_ids=None) -> CongestionForecaster:
     return CongestionForecaster(
         departure=departure or timezone.now(),

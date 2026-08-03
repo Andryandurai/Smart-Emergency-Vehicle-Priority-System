@@ -3,10 +3,25 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.brain import graph as graph_mod
-from apps.brain.congestion import CongestionForecaster, build_forecaster, default_speed_factor
+from apps.brain.congestion import (
+    CongestionForecaster,
+    build_forecaster,
+    congested_segment_ids,
+    default_speed_factor,
+)
+from apps.brain.rerouting import evaluate_trip
 from apps.brain.router import RouteNotFound, route_between
-from apps.core.enums import PriorityLevel, RoadClass
+from apps.core.enums import (
+    CongestionLevel,
+    PriorityLevel,
+    RoadClass,
+    TripStage,
+    VehicleStatus,
+)
 from apps.core.geo import Point
+from apps.dispatch.models import EmergencyTrip
+from apps.dispatch.orchestrator import apply_new_route
+from apps.fleet.models import EmergencyVehicle
 from apps.network.models import Intersection, RoadEvent, RoadSegment
 
 
@@ -162,3 +177,140 @@ class CongestionTests(TestCase):
         clean = CongestionForecaster().forecast(edge, 0).speed_kmh
         penalised = CongestionForecaster(event_penalty={segment.id: 0.4}).forecast(edge, 0).speed_kmh
         self.assertLess(penalised, clean)
+
+
+class CongestionRerouteTests(TestCase):
+    """Layer 2 - heavy congestion ahead must move the vehicle off the jam.
+
+    The grid gives every origin/destination pair at least two roughly equal
+    paths, so jamming one of them leaves a genuinely faster alternative and the
+    decision is not a coin toss.
+    """
+
+    def setUp(self):
+        from apps.hospitals.rules import seed_rules
+
+        seed_rules()
+        self.nodes = build_grid(size=5)
+        self.origin = self.nodes[(0, 0)]
+        self.destination = self.nodes[(4, 4)]
+
+        self.vehicle = EmergencyVehicle.objects.create(
+            callsign="CONG-01",
+            latitude=self.origin.latitude,
+            longitude=self.origin.longitude,
+            status=VehicleStatus.TRANSPORTING,
+            priority_level=PriorityLevel.CRITICAL,
+        )
+        self.trip = EmergencyTrip.objects.create(
+            vehicle=self.vehicle,
+            emergency_category="cardiac",
+            stage=TripStage.TO_HOSPITAL,
+            priority_level=PriorityLevel.CRITICAL,
+            destination_latitude=self.destination.latitude,
+            destination_longitude=self.destination.longitude,
+        )
+        route = route_between(
+            Point(self.origin.latitude, self.origin.longitude),
+            Point(self.destination.latitude, self.destination.longitude),
+            priority_level=PriorityLevel.CRITICAL,
+        )
+        self.plan = apply_new_route(self.trip, route, reason="initial")
+        self.trip.refresh_from_db()
+
+    def tearDown(self):
+        graph_mod.invalidate()
+
+    def _jam_route_ahead(self, speed_kmh: float = 4.0):
+        """Bring every segment on the planned route to a crawl."""
+        segment_ids = [step["segment_id"] for step in self.plan.steps]
+        for segment in RoadSegment.objects.filter(id__in=segment_ids):
+            segment.apply_speed(speed_kmh)
+        graph_mod.invalidate()
+        return segment_ids
+
+    def test_a_clear_route_is_not_congested(self):
+        decision = evaluate_trip(self.trip, force=True)
+        self.assertFalse(decision.congested)
+
+    def test_jammed_segments_are_reported_as_congested(self):
+        self._jam_route_ahead()
+        decision = evaluate_trip(self.trip)
+        self.assertTrue(
+            decision.congested,
+            "a route whose every segment is crawling must be flagged congested",
+        )
+
+    def test_congestion_threshold_matches_the_heavy_band(self):
+        """0.55 is where CongestionLevel stops saying 'moderate'.
+
+        Guards the invariant the map depends on: the colour, the popup word
+        and the reroute trigger must all change at the same point.
+        """
+        segment = RoadSegment.objects.first()
+
+        # Just below ratio 0.45 is the first "heavy" reading (the boundary
+        # itself belongs to moderate).
+        segment.apply_speed(segment.design_speed_kmh * 0.40)
+        segment.refresh_from_db()
+        self.assertEqual(segment.congestion_level, CongestionLevel.HEAVY)
+        self.assertIn(segment.id, congested_segment_ids())
+
+        # Exactly on the boundary: still moderate, so still not a trigger.
+        segment.apply_speed(segment.design_speed_kmh * 0.45)
+        segment.refresh_from_db()
+        self.assertEqual(segment.congestion_level, CongestionLevel.MODERATE)
+        self.assertNotIn(segment.id, congested_segment_ids())
+
+    def test_congestion_bypasses_the_replan_cooldown(self):
+        """The cooldown is why a vehicle used to drive into a known jam.
+
+        The plan was computed moments ago, so an ordinary evaluation returns
+        'cooldown active'. Congestion must not be silenced by it.
+        """
+        clear = evaluate_trip(self.trip)
+        self.assertEqual(clear.reason, "replan cooldown active")
+
+        self._jam_route_ahead()
+        congested = evaluate_trip(self.trip)
+        self.assertNotEqual(congested.reason, "replan cooldown active")
+
+    def test_vehicle_is_moved_onto_the_faster_road(self):
+        """End to end: jam the route, and the trip ends up on a new one."""
+        jammed = set(self._jam_route_ahead())
+
+        decision = evaluate_trip(self.trip)
+        self.assertTrue(decision.should_reroute, decision.reason)
+        self.assertTrue(decision.congested)
+        self.assertIn("heavy congestion", decision.reason)
+
+        apply_new_route(self.trip, decision.route, reason=decision.reason)
+        self.trip.refresh_from_db()
+
+        new_segments = {step["segment_id"] for step in self.trip.active_route.steps}
+        self.assertTrue(
+            new_segments - jammed,
+            "the replanned route must use at least one road that is not jammed",
+        )
+
+    def test_a_slower_detour_is_still_refused(self):
+        """Congestion lowers the bar; it does not remove it.
+
+        The road ahead is heavy, but every way around it is worse - so the
+        vehicle stays put rather than abandoning an armed green corridor to
+        arrive later.
+        """
+        on_route = set(self._jam_route_ahead(speed_kmh=15.0))
+        for segment in RoadSegment.objects.exclude(id__in=on_route):
+            segment.apply_speed(2.0)
+        graph_mod.invalidate()
+
+        decision = evaluate_trip(self.trip)
+        self.assertTrue(decision.congested)
+        self.assertFalse(decision.should_reroute, decision.reason)
+        # Zero, not negative: the best alternative the router can find *is*
+        # the current route. Both sides are priced with the same model, so a
+        # route compared against itself must come out even - a non-zero gain
+        # here would mean the comparison is measuring the model, not the road.
+        self.assertEqual(round(decision.gain_s), 0)
+

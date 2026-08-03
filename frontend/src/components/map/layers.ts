@@ -68,12 +68,81 @@ export function lineToLatLngs(coordinates: [number, number][]): LatLngExpression
 // ---------------------------------------------------------------------------
 // Styling
 // ---------------------------------------------------------------------------
-export function congestionColour(index: number): string {
-  if (index >= 0.8) return "#e74c3c";
-  if (index >= 0.55) return "#e67e22";
-  if (index >= 0.35) return "#f1c40f";
-  if (index >= 0.15) return "#9acd32";
-  return "#2ecc71";
+/**
+ * Traffic colouring, Google-Maps convention.
+ *
+ * Three bands, not five. The point of a traffic layer is a decision - "can I
+ * take this road" - and five shades of green-to-red makes an operator read the
+ * legend to answer it. Blue is deliberately the free-flow colour rather than
+ * green: green on this map already means "signal held for a corridor", and two
+ * meanings for one colour on a map an operator scans under pressure is the
+ * kind of ambiguity that costs seconds.
+ *
+ * ``congestion_index`` is 0 (free flow) to 1 (standstill), derived from the
+ * current/free-flow speed ratio - the thresholds mirror CongestionLevel in
+ * apps/core/enums.py so the colour and the word always agree.
+ */
+export const TRAFFIC_FREE = "#4285f4";     // blue      - clear run
+export const TRAFFIC_SLIGHT = "#fbbc04";   // yellow    - slowing
+export const TRAFFIC_HEAVY = "#8c0d1c";    // dark red  - heavy / standstill
+// Purple, not a darker red. A closure is a different kind of fact from slow
+// traffic - you cannot drive it at all - and the earlier dark-red-on-red was
+// unreadable against a heavy segment at speed.
+export const TRAFFIC_BLOCKED = "#a259ff";  // purple    - impassable
+
+export type TrafficBand = "free" | "slight" | "heavy";
+
+/**
+ * Collapse the backend's five congestion levels into the three bands the map
+ * draws. Derived from the *level* rather than the raw index wherever the
+ * server sent one, so the colour on the map and the word in the popup can
+ * never disagree - they did, before this: the index thresholds here had
+ * drifted from CongestionLevel.from_ratio in apps/core/enums.py, and a
+ * segment labelled "heavy" was being drawn amber.
+ */
+const BAND_BY_LEVEL: Record<string, TrafficBand> = {
+  free: "free",
+  light: "free",
+  moderate: "slight",
+  heavy: "heavy",
+  jam: "heavy",
+};
+
+/** Index boundaries, mirroring `CongestionLevel.from_ratio` (index = 1 - ratio). */
+export function trafficBand(index: number, level?: unknown): TrafficBand {
+  const named = BAND_BY_LEVEL[String(level ?? "")];
+  if (named) return named;
+  if (index >= 0.55) return "heavy";   // ratio < 0.45 -> heavy or jam
+  if (index >= 0.35) return "slight";  // ratio < 0.65 -> moderate
+  return "free";                       // free or light
+}
+
+export function congestionColour(index: number, level?: unknown): string {
+  const band = trafficBand(index, level);
+  if (band === "heavy") return TRAFFIC_HEAVY;
+  if (band === "slight") return TRAFFIC_SLIGHT;
+  return TRAFFIC_FREE;
+}
+
+/** Heavier stroke for worse traffic, so the layer reads without colour. */
+export function congestionWeight(index: number, level?: unknown): number {
+  const band = trafficBand(index, level);
+  if (band === "heavy") return 4.5;
+  if (band === "slight") return 3.5;
+  return 2.5;
+}
+
+/** Live aspect colour for a signal head. Mirrors SignalPhase in enums.py. */
+export const SIGNAL_PHASE_COLOUR: Record<string, string> = {
+  red: "#ff3b30",
+  amber: "#ffab00",
+  green: "#34c759",
+  flashing_amber: "#ffab00",
+  off: "#6b7683",
+};
+
+export function signalPhaseColour(phase: unknown): string {
+  return SIGNAL_PHASE_COLOUR[String(phase ?? "off")] ?? SIGNAL_PHASE_COLOUR.off!;
 }
 
 const PRIORITY_COLOUR: Record<number, string> = {
@@ -101,12 +170,17 @@ export function pointStyle(layer: string, properties: Record<string, unknown>): 
         radius: properties.is_trauma_designated ? 9 : 7,
       };
     case "traffic_signals":
-      // A held signal is the single most important thing on this map: it means
-      // cross traffic is stopped right now.
-      if (properties.is_preempted) return { colour: "#2ecc71", radius: 8 };
-      return { colour: properties.is_online ? "#8b98a9" : "#e74c3c", radius: 4 };
+      // Drawn as the aspect it is actually showing. A preempted signal is
+      // green by definition, and gets a larger radius plus a halo in the
+      // marker so "held for a corridor" is distinguishable from "green in
+      // its normal cycle" - both matter, and they are not the same fact.
+      if (!properties.is_online) return { colour: "#6b7683", radius: 4 };
+      return {
+        colour: signalPhaseColour(properties.current_phase),
+        radius: properties.is_preempted ? 8 : 5,
+      };
     case "road_closures":
-      return { colour: properties.blocks_road ? "#e74c3c" : "#ff9f43", radius: 7 };
+      return { colour: properties.blocks_road ? TRAFFIC_BLOCKED : "#ff9f43", radius: 7 };
     case "emergency_vehicles":
       return { colour: priorityColour(properties.priority_level as number), radius: 8 };
     case "display_boards":
@@ -132,10 +206,17 @@ export function lineStyle(
   }
   // road_network
   const open = properties.is_open !== false;
+  if (!open) {
+    return { color: TRAFFIC_BLOCKED, weight: 5, opacity: 0.9, dashArray: "6 5" };
+  }
+  const index = (properties.congestion_index as number) ?? 0;
+  const level = properties.congestion_level;
   return {
-    color: open ? congestionColour((properties.congestion_index as number) ?? 0) : "#e74c3c",
-    weight: open ? 2 : 4,
-    opacity: 0.55,
+    color: congestionColour(index, level),
+    weight: congestionWeight(index, level),
+    // Congested roads are the ones worth seeing, so opacity rises with the
+    // index instead of being flat - a clear network recedes into the basemap.
+    opacity: trafficBand(index, level) === "free" ? 0.5 : 0.85,
   };
 }
 
@@ -148,9 +229,11 @@ export function describeFeature(layer: string, properties: Record<string, unknow
         p.is_on_diversion ? "<br><b>ON DIVERSION</b>" : ""
       }<br>ED beds ${p.emergency_beds_available} · ICU ${p.icu_beds_available}`;
     case "traffic_signals":
-      return `<b>${p.controller_id}</b><br>${p.intersection}<br>phase: ${p.current_phase}${
-        p.is_preempted ? " (priority hold)" : ""
-      }`;
+      return `<b>${p.intersection}</b><br>${p.controller_id}<br>Aspect: <b>${String(
+        p.current_phase,
+      ).replaceAll("_", " ")}</b>${
+        p.is_preempted ? "<br><b>HELD GREEN — emergency corridor</b>" : ""
+      }${p.is_online ? "" : "<br><b>OFFLINE</b>"}`;
     case "road_closures":
       return `<b>${p.event_type_display}</b><br>${p.description || "reported"}<br>severity ${Math.round(
         Number(p.severity) * 100,

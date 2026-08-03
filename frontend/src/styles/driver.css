@@ -1,0 +1,338 @@
+/* ===================================================================
+   Driver module: takeover, readiness checklist, in-vehicle navigation
+   console, and the admin fleet board.
+
+   The navigation console is the one screen in SEVPS designed to be read
+   at a glance by someone who must not be looking at it: bigger type,
+   fewer things, and the two numbers that matter (speed, ETA) placed
+   where the eye already goes. Everything else in here follows the
+   existing SEVPS language.
+   =================================================================== */
+
+/* ----------------------------------------------------- takeover / setup */
+.driver-setup {
+  height: 100%; overflow-y: auto; padding: 22px;
+  max-width: 900px; margin: 0 auto;
+}
+.driver-setup header { margin-bottom: 18px; }
+.driver-setup h1 { margin: 0 0 4px; font-size: 22px; }
+.driver-setup header p { margin: 0; color: var(--muted, #8b98a9); font-size: 13px; }
+
+.nav-boot {
+  height: 100%; display: flex; flex-direction: column; gap: 8px;
+  align-items: center; justify-content: center; text-align: center;
+  color: var(--muted, #8b98a9); padding: 24px;
+}
+.nav-boot h2 { color: var(--text, #e8eef5); margin: 0; }
+
+.nav-empty-card {
+  padding: 18px; border-radius: 8px; font-size: 13px; line-height: 1.6;
+  border: 1px dashed var(--line, #26313d); color: var(--muted, #8b98a9);
+}
+
+.veh-choice-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px;
+}
+.veh-choice {
+  display: flex; flex-direction: column; gap: 5px; align-items: flex-start;
+  width: 100%; padding: 14px; text-align: left;
+  border-radius: 9px; border: 1px solid var(--line, #26313d);
+  background: rgba(255, 255, 255, .03); color: var(--text, #e8eef5);
+}
+.veh-choice:hover { border-color: #4da3ff; }
+.veh-choice.selected {
+  border-color: #4da3ff; background: rgba(77, 163, 255, .14);
+  box-shadow: inset 0 0 0 1px rgba(77, 163, 255, .5);
+}
+.vc-callsign { font-size: 19px; font-weight: 800; letter-spacing: .5px; }
+.vc-meta { font-size: 11.5px; }
+
+.setup-confirm {
+  margin-top: 18px; padding: 14px; border-radius: 9px;
+  border: 1px solid #2f5f8f; background: rgba(77, 163, 255, .07);
+}
+
+/* --------------------------------------------- readiness checklist (driver) */
+.driver-setup.checklist { max-width: 780px; }
+.check-row.driver {
+  flex-wrap: wrap; gap: 8px; padding: 9px 0;
+}
+.check-row.driver .check-actions .yn {
+  padding: 8px 14px; font-size: 12px;   /* thumb-sized, used standing up */
+}
+.check-note {
+  flex: 1 1 100%; margin-top: 4px; font-size: 12px;
+}
+.checklist-actions {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; gap: 8px; padding: 12px 0;
+  background: linear-gradient(180deg, transparent, var(--bg, #0b1016) 30%);
+}
+.checklist-actions .primary-action { flex: 1; }
+.checklist-actions .ghost { width: auto; padding: 11px 16px; }
+
+.driver-setup.grounded .grounded-title { color: var(--l1, #ff4d4f); }
+.report-card {
+  margin: 12px 0; padding: 12px; border-radius: 8px;
+  border: 1px solid var(--l1, #ff4d4f); background: rgba(255, 77, 79, .08);
+}
+.rc-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 700; margin-bottom: 6px;
+}
+.rc-reasons { font-size: 12.5px; color: #ffc9ca; }
+.rc-remarks {
+  margin: 8px 0 0; font-size: 11.5px; white-space: pre-wrap;
+  color: var(--muted, #8b98a9); font-family: inherit;
+}
+
+/* =========================== navigation console =========================== */
+.nav-console {
+  display: grid; grid-template-columns: 1fr 340px; height: 100%;
+  background: #070b10;
+}
+.nav-map-wrap { position: relative; overflow: hidden; }
+/* Normal size when north-up. The container is only oversized while rotating,
+   because rotation exposes the corners - paying for that overdraw (and for
+   the mismatch it creates between Leaflet's viewport and the visible one)
+   when the map is not rotating buys nothing. */
+.nav-map { height: 100%; width: 100%; }
+.nav-map.leaflet-container.nav-rotating {
+  position: absolute;
+  top: -22%; left: -22%;
+  height: 144%; width: 144%;
+}
+/* A driver does not use zoom buttons at speed, and they sit exactly where the
+   speed readout goes. Pinch and the orientation toggle remain. */
+.nav-map .leaflet-control-zoom { display: none; }
+
+/* Heading-up rotation.
+   Applied to the container, NOT to `.leaflet-map-pane`. The pane is far
+   larger than the viewport and Leaflet positions it with its own translate,
+   so `transform-origin: 50% 50%` on the pane pivots about a point that is
+   nowhere near the middle of the screen - which throws markers thousands of
+   pixels out of frame. The container's centre is the screen's centre, so
+   rotating it is the only origin that means what it looks like it means. */
+.leaflet-container.nav-rotating {
+  transform-origin: 50% 50%;
+  transform: rotate(var(--nav-heading, 0deg));
+  transition: transform .55s cubic-bezier(.25, .8, .3, 1);
+}
+/* Counter-rotated so text stays upright while the road turns. */
+.leaflet-container.nav-rotating .leaflet-marker-icon,
+.leaflet-container.nav-rotating .leaflet-tooltip,
+.leaflet-container.nav-rotating .leaflet-popup,
+.leaflet-container.nav-rotating .leaflet-control-attribution {
+  transform-origin: 50% 50%;
+  rotate: calc(-1 * var(--nav-heading, 0deg));
+}
+
+/* ------------------------------------------------------------------- HUD */
+.hud {
+  position: absolute; left: 0; right: 0; top: 0; z-index: 700;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
+  padding: 14px 18px 26px;
+  background: linear-gradient(180deg, rgba(7, 11, 16, .96) 55%, rgba(7, 11, 16, 0));
+  pointer-events: none;
+}
+.hud-speed, .hud-eta { display: flex; flex-direction: column; line-height: 1; }
+.hud-speed b { font-size: 40px; font-weight: 800; letter-spacing: -1px; }
+.hud-speed span, .hud-eta span { font-size: 10.5px; color: var(--muted, #8b98a9); }
+.hud-eta { align-items: flex-end; text-align: right; }
+.hud-eta b { font-size: 26px; font-weight: 800; color: #4da3ff; }
+.hud-mid { min-width: 0; }
+.hud-road {
+  font-size: 15px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-dest { font-size: 12px; color: var(--muted, #8b98a9); }
+
+.nav-orient {
+  position: absolute; right: 14px; bottom: 78px; z-index: 800;
+  width: 40px; height: 40px; padding: 0; border-radius: 50%;
+  background: var(--panel, #131a23); border: 1px solid var(--line, #26313d);
+  color: var(--text, #e8eef5); font-size: 14px; font-weight: 700;
+}
+
+.corridor-banner {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 800;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; border-radius: 999px; font-size: 13px;
+  background: var(--panel, #131a23); border: 1px solid var(--line, #26313d);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .6);
+}
+.cb-label {
+  font-size: 9.5px; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--muted, #8b98a9); font-weight: 700;
+}
+.cb-state { font-weight: 600; }
+.corridor-banner.go { border-color: #34c759; }
+.corridor-banner.go .cb-state { color: #7ee0a8; }
+.corridor-banner.arming { border-color: #ffab00; }
+.corridor-banner.arming .cb-state { color: #ffd591; }
+.corridor-banner.fail { border-color: var(--l1, #ff4d4f); }
+.corridor-banner.fail .cb-state { color: #ffc9ca; }
+
+/* ------------------------------------------------------------- side panels */
+.nav-side {
+  overflow-y: auto; padding: 12px;
+  background: var(--panel-2, #0f151d); border-left: 1px solid var(--line, #26313d);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.nav-head { display: flex; align-items: center; justify-content: space-between; }
+.nav-callsign { font-size: 20px; font-weight: 800; letter-spacing: .5px; }
+
+.nav-panel {
+  padding: 11px; border-radius: 9px;
+  border: 1px solid var(--line, #26313d); background: rgba(255, 255, 255, .02);
+}
+.nav-panel h4 {
+  margin: 0 0 8px; font-size: 9.5px; letter-spacing: .9px;
+  text-transform: uppercase; color: var(--muted, #8b98a9); font-weight: 700;
+}
+.nav-empty { margin: 0; font-size: 11.5px; color: var(--muted, #8b98a9); }
+
+/* ------------------------------------------------------------ signal strip */
+.sig-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  padding: 9px 0; border-bottom: 1px solid rgba(255, 255, 255, .05);
+}
+.sig-row:last-child { border-bottom: none; }
+/* The next signal is the only one being driven towards, so it gets the weight. */
+.sig-row.next .sig-dist { font-size: 17px; color: var(--text, #e8eef5); }
+.sig-lamp {
+  display: flex; flex-direction: column; gap: 2px; padding: 3px;
+  background: #12171f; border: 1px solid #39424f; border-radius: 3px;
+}
+.sig-lamp i { width: 7px; height: 7px; border-radius: 50%; background: #2a3038; opacity: .5; }
+.sig-lamp i.on { opacity: 1; }
+.sig-lamp i.green.on { background: #34c759; box-shadow: 0 0 6px #34c759; }
+.sig-lamp i.amber.on { background: #ffab00; box-shadow: 0 0 6px #ffab00; }
+.sig-lamp i.red.on { background: #ff3b30; box-shadow: 0 0 6px #ff3b30; }
+.sig-dist { font-size: 13.5px; font-weight: 700; }
+.sig-name {
+  font-size: 11.5px; color: var(--muted, #8b98a9);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sig-state { font-size: 11px; }
+.sig-row.go .sig-state { color: #7ee0a8; }
+.sig-row.arming .sig-state { color: #ffd591; }
+.sig-row.fail .sig-state { color: #ffc9ca; font-weight: 700; }
+.sig-eta { text-align: right; font-variant-numeric: tabular-nums; }
+.sig-eta b { font-size: 19px; }
+.sig-eta span { font-size: 10px; color: var(--muted, #8b98a9); }
+.go-now { font-size: 12px; font-weight: 800; color: #34c759; letter-spacing: .5px; }
+
+/* ------------------------------------------------------------ route panel */
+.route-opt {
+  display: block; width: 100%; text-align: left; margin-bottom: 7px;
+  padding: 10px; border-radius: 8px;
+  border: 1px solid var(--line, #26313d); background: rgba(255, 255, 255, .03);
+  color: var(--text, #e8eef5);
+}
+.route-opt:hover { border-color: #4da3ff; }
+.route-opt.selected { border-color: #4da3ff; background: rgba(77, 163, 255, .12); }
+.route-opt.recommended { border-left: 3px solid #4da3ff; }
+.route-opt-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font-size: 12.5px; font-weight: 600;
+}
+.ai-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 3px;
+  background: #4da3ff; color: #08131f; font-size: 9px; font-weight: 800;
+}
+.route-traffic { font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.route-traffic.clear { color: #4285f4; }
+.route-traffic.moderate { color: #fbbc04; }
+.route-traffic.heavy { color: #ff6b6b; }
+.route-opt-metrics {
+  display: flex; gap: 12px; margin: 5px 0 3px; font-size: 11.5px;
+  color: var(--muted, #8b98a9);
+}
+.route-opt-metrics b { color: var(--text, #e8eef5); font-size: 13px; }
+.route-opt-metrics .gain { color: #2ecc71; font-weight: 700; }
+.route-opt-metrics .loss { color: #ff9f43; font-weight: 700; }
+.route-reason { font-size: 11px; color: var(--muted, #8b98a9); line-height: 1.45; }
+
+/* -------------------------------------------------------- transfer / fault */
+.transfer-offer {
+  padding: 12px; border-radius: 9px;
+  border: 1px solid var(--l1, #ff4d4f); background: rgba(255, 77, 79, .12);
+  animation: transfer-pulse 1.6s ease-in-out infinite;
+}
+@keyframes transfer-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, .45); }
+  50% { box-shadow: 0 0 0 7px rgba(255, 77, 79, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .transfer-offer { animation: none; } }
+.to-title {
+  font-size: 12px; font-weight: 800; letter-spacing: .6px;
+  text-transform: uppercase; color: #ffc9ca; margin-bottom: 5px;
+}
+.to-body { font-size: 12.5px; line-height: 1.55; }
+
+.breakdown-live {
+  padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  border: 1px dashed #ff9f43; background: rgba(255, 159, 67, .09); color: #ffd591;
+}
+
+.fault-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 5px; margin: 8px 0;
+}
+.fault {
+  padding: 8px 6px; font-size: 11px; border-radius: 6px;
+  border: 1px solid var(--line, #26313d); background: rgba(255, 255, 255, .03);
+  color: var(--text, #e8eef5);
+}
+.fault.on { background: #ff4d4f; border-color: #ff4d4f; color: #fff; font-weight: 700; }
+button.ghost.danger.wide { width: 100%; padding: 12px; font-size: 13px; font-weight: 700; }
+
+/* ============================== fleet board ============================== */
+.fleet-page { max-width: none; }
+.fleet-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.fleet-stats { flex-wrap: wrap; }
+
+.fleet-filters { display: flex; gap: 6px; margin: 12px 0; }
+.chip {
+  width: auto; padding: 6px 13px; font-size: 11.5px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line, #26313d);
+  color: var(--muted, #8b98a9);
+}
+.chip.on { background: #4da3ff; border-color: #4da3ff; color: #08131f; font-weight: 700; }
+
+.fleet-table-wrap { overflow-x: auto; margin-bottom: 18px; }
+.fleet-table { min-width: 1180px; font-size: 12px; }
+.fleet-table th { white-space: nowrap; }
+.fleet-table td { vertical-align: top; padding: 9px 8px; }
+.fl-callsign { font-weight: 800; font-size: 13px; }
+.veh-reg.small { font-size: 10px; padding: 1px 5px; letter-spacing: .5px; }
+.stale { color: #ff9f43; font-size: 10px; }
+/* A grounded ambulance has to be findable in a long table without reading it. */
+.grounded-row { background: rgba(255, 77, 79, .07); }
+.grounded-row td:first-child { box-shadow: inset 3px 0 0 var(--l1, #ff4d4f); }
+.insp.failed { color: #ff4d4f; font-weight: 700; }
+.insp.skippedpending { color: #ffab00; font-weight: 700; }
+.insp.complete { color: #2ecc71; }
+.insp.notstarted { color: var(--muted, #8b98a9); }
+.override-select { font-size: 11px; padding: 4px 6px; min-width: 96px; }
+
+@media (max-width: 1100px) {
+  .nav-console { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
+  .nav-side { border-left: none; border-top: 1px solid var(--line, #26313d); }
+}
+
+/* -------------------------------------------------- journey status (driver) */
+.stage-now {
+  font-size: 15px; font-weight: 700; margin-bottom: 8px;
+}
+.stage-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.stage-btn {
+  padding: 11px 8px; font-size: 12px; border-radius: 9px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--line, #26313d);
+  color: var(--text, #e8eef5);
+}
+.stage-btn.on {
+  background: #4da3ff; border-color: #4da3ff; color: #08131f; font-weight: 700;
+}
+.stage-btn:disabled { opacity: .6; }

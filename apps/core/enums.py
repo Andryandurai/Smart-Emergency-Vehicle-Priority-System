@@ -7,10 +7,33 @@ from django.db import models
 
 
 class VehicleType(models.TextChoices):
+    """Vehicle classes SEVPS dispatches.
+
+    Fire engines and police vehicles were removed: the platform's clinical
+    spine - emergency category, hospital capability matching, bed capacity,
+    patient handover - only has meaning for patient transport, and a fire
+    engine on the fleet list invited an operator to dispatch one down a route
+    planned against hospital beds. ``Role.TRAFFIC_POLICE`` is unrelated and
+    remains: that is the control room operating the signals, not a vehicle.
+    """
+
     AMBULANCE = "ambulance", "Ambulance"
-    FIRE_ENGINE = "fire_engine", "Fire Engine"
-    POLICE = "police", "Police Vehicle"
     DISASTER_RESPONSE = "disaster", "Disaster Response Unit"
+
+
+class VehicleOwnership(models.TextChoices):
+    """Who operates the vehicle.
+
+    Kept separate from :class:`VehicleType` because the two answer different
+    questions: type decides what the vehicle can do, ownership decides who to
+    bill, who to call and which dispatch agreements apply. A crew looking at
+    the vehicle list needs both.
+    """
+
+    GOVERNMENT = "government", "Government"
+    PRIVATE_HOSPITAL = "private_hospital", "Private Hospital"
+    PRIVATE_SERVICE = "private_service", "Private Ambulance Service"
+    NGO = "ngo", "NGO / Charitable Trust"
 
 
 class VehicleStatus(models.TextChoices):
@@ -38,6 +61,124 @@ class EmergencyCategory(models.TextChoices):
     FIRE_RESCUE = "fire_rescue", "Fire / Rescue"
     TRANSFER = "transfer", "Non-critical Transfer"
     UNKNOWN = "unknown", "Undetermined"
+
+
+class PatientSymptom(models.TextChoices):
+    """What the crew can actually observe at the scene.
+
+    Symptoms exist alongside :class:`EmergencyCategory`, not instead of it. A
+    category is a diagnosis, and a paramedic at a roadside frequently cannot
+    make one - but they can always say the patient is unconscious and
+    bleeding. Recording observations rather than forcing a guessed diagnosis
+    is both safer clinically and better input for hospital matching: see
+    ``apps/hospitals/symptoms.py`` for how these map to required facilities.
+    """
+
+    UNCONSCIOUS = "unconscious", "Unconscious"
+    BLEEDING = "bleeding", "Bleeding"
+    BREATHING_DIFFICULTY = "breathing_difficulty", "Breathing Difficulty"
+    SEIZURE = "seizure", "Seizure"
+    VOMITING = "vomiting", "Vomiting"
+    FRACTURE = "fracture", "Fracture"
+    BURNS = "burns", "Burns"
+    PARALYSIS = "paralysis", "Paralysis"
+    CHEST_PAIN = "chest_pain", "Chest Pain"
+    FEVER = "fever", "Fever"
+
+
+class VehicleReadiness(models.TextChoices):
+    """Fitness for dispatch, as distinct from :class:`VehicleStatus`.
+
+    Two different questions. ``VehicleStatus`` says what the vehicle is doing
+    (available, transporting, returning); readiness says whether it is fit to
+    do anything at all. A vehicle can be AVAILABLE and NOT_READY at the same
+    time - parked at the station with failed brakes - and conflating the two
+    is how an unfit ambulance gets dispatched.
+
+    ``TEMPORARILY_READY`` is the emergency-skip state: dispatchable now, with
+    an inspection still owed. It is deliberately not ``READY``, so it can be
+    counted, chased and shown in amber on the fleet board.
+    """
+
+    UNCHECKED = "unchecked", "Not yet inspected"
+    READY = "ready", "Ready for service"
+    TEMPORARILY_READY = "temporarily_ready", "Temporarily ready - inspection pending"
+    NOT_READY = "not_ready", "Not ready - failed inspection"
+    MAINTENANCE = "maintenance", "In maintenance"
+
+
+class FailureReason(models.TextChoices):
+    """What the driver says is wrong. Drives the maintenance report's triage."""
+
+    ENGINE = "engine", "Engine"
+    BATTERY = "battery", "Battery"
+    TYRES = "tyres", "Tyres"
+    BRAKES = "brakes", "Brakes"
+    GPS = "gps", "GPS device"
+    SIREN = "siren", "Siren"
+    EMERGENCY_LIGHTS = "emergency_lights", "Emergency lights"
+    OXYGEN = "oxygen", "Oxygen supply"
+    MEDICAL_EQUIPMENT = "medical_equipment", "Medical equipment"
+    OTHER = "other", "Other"
+
+
+class MaintenanceState(models.TextChoices):
+    OPEN = "open", "Open - awaiting workshop"
+    ACKNOWLEDGED = "acknowledged", "Acknowledged by fleet"
+    IN_PROGRESS = "in_progress", "Repair in progress"
+    RESOLVED = "resolved", "Resolved - vehicle returned to service"
+
+
+class BreakdownState(models.TextChoices):
+    """Lifecycle of an in-transport failure and the handover that follows."""
+
+    OPEN = "open", "Open - seeking replacement"
+    TRANSFER_ACCEPTED = "transfer_accepted", "Replacement accepted"
+    TRANSFER_COMPLETE = "transfer_complete", "Patient transferred"
+    RESOLVED = "resolved", "Resolved without transfer"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class TransferOfferState(models.TextChoices):
+    OFFERED = "offered", "Offered"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+    WITHDRAWN = "withdrawn", "Withdrawn - another crew took it"
+
+
+class ShiftStatus(models.TextChoices):
+    """Lifecycle of a crew takeover.
+
+    ``DRAFT`` exists because the readiness inspection comes *before* the
+    paramedic is asked. A driver claims a vehicle, walks it, and only then
+    knows whether it is worth calling a colleague to it - requesting a
+    paramedic onto an ambulance that turns out to have failed brakes wastes
+    the one person the driver most needs available.
+    """
+
+    DRAFT = "draft", "Vehicle claimed - inspection in progress"
+    PENDING = "pending", "Awaiting paramedic acceptance"
+    ACTIVE = "active", "Active - crew on duty"
+    DECLINED = "declined", "Declined by paramedic"
+    ENDED = "ended", "Ended"
+
+
+class HospitalChoiceReason(models.TextChoices):
+    """Why this hospital, when it was not the recommended one.
+
+    ``PATIENT_REQUEST`` is legally distinct from the others: a patient's
+    choice of hospital must be honoured, so it is not a clinical override to
+    be second-guessed in review - it is a record that the crew followed the
+    law. Keeping it as its own value means an audit can separate "the crew
+    disagreed with the engine" from "the patient exercised their right".
+    """
+
+    RECOMMENDED = "recommended", "Followed the recommendation"
+    PATIENT_REQUEST = "patient_request", "Patient's choice of hospital"
+    FAMILY_REQUEST = "family_request", "Family's request"
+    CLINICAL_JUDGEMENT = "clinical_judgement", "Crew clinical judgement"
+    CAPACITY = "capacity", "Capacity or diversion"
+    CONTINUITY_OF_CARE = "continuity", "Patient already under care there"
 
 
 class PriorityLevel(models.IntegerChoices):

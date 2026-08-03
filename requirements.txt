@@ -59,6 +59,13 @@ shap==0.46.0
 pywebpush==2.3.0
 
 # ---------------------------------------------------------------------------
+# Staff profile pictures (Phase 14)
+#   Django's ImageField validates dimensions through Pillow, so it is required
+#   rather than optional once StaffProfile.avatar exists.
+# ---------------------------------------------------------------------------
+Pillow==12.3.0
+
+# ---------------------------------------------------------------------------
 # Optional - Firebase Cloud Messaging adapter
 #   Only needed for native Android clients holding an FCM registration token
 #   rather than a W3C push subscription. Browsers do not need this; see

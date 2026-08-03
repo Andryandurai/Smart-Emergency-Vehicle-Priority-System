@@ -1,15 +1,9 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import { auth } from "@/api/endpoints";
+import type { DemoAccount } from "@/api/types";
 import { useAuthStore } from "@/stores/authStore";
-
-const DEMO_ACCOUNTS = [
-  ["admin", "sevps-admin", "Administrator"],
-  ["police", "sevps-police", "Traffic Police"],
-  ["dispatcher", "sevps-dispatcher", "Emergency Dispatcher"],
-  ["paramedic", "sevps-paramedic", "Ambulance Driver"],
-  ["hospital", "sevps-hospital", "Hospital Staff"],
-] as const;
 
 export function LoginPage() {
   const status = useAuthStore((state) => state.status);
@@ -23,6 +17,23 @@ export function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+
+  /**
+   * Seeded credentials, fetched rather than hardcoded.
+   *
+   * The old list was gated on `import.meta.env.DEV`, which is false in the
+   * built bundle Django serves - so the credentials were invisible in exactly
+   * the setup people actually run. The server gates on DEBUG instead and
+   * returns nothing in production, which is both the correct check and the
+   * one that works here.
+   */
+  const [accounts, setAccounts] = useState<DemoAccount[]>([]);
+  useEffect(() => {
+    auth
+      .demoAccounts()
+      .then((result) => setAccounts(result.accounts))
+      .catch(() => setAccounts([]));
+  }, []);
 
   if (status === "authenticated") return <Navigate to={from} replace />;
 
@@ -81,34 +92,99 @@ export function LoginPage() {
           </div>
         </form>
 
-        {import.meta.env.DEV && (
-          <div className="card">
-            <h3>Demo accounts</h3>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Password</th>
-                  <th>Role</th>
-                </tr>
-              </thead>
-              <tbody>
-                {DEMO_ACCOUNTS.map(([user, pass, role]) => (
-                  <tr key={user} onClick={() => fill(user, pass)} style={{ cursor: "pointer" }}>
-                    <td className="mono">{user}</td>
-                    <td className="mono">{pass}</td>
-                    <td>{role}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {accounts.length > 0 && (
+          <>
+            {/* Crew roles get their own cards with names and staff ids -
+                a shift is a pairing, so picking *which* driver and *which*
+                paramedic is the first thing a tester has to do. */}
+            <AccountCard
+              title="Driver logins"
+              subtitle="Tap a row to fill the form. Drivers select the ambulance and open the shift."
+              accounts={accounts.filter((a) => a.is_driver)}
+              onPick={fill}
+              showName
+            />
+            <AccountCard
+              title="Paramedic logins"
+              subtitle="Paramedics accept the driver's sync request and record the assessment."
+              accounts={accounts.filter((a) => a.is_paramedic)}
+              onPick={fill}
+              showName
+            />
+            <AccountCard
+              title="Other roles"
+              subtitle=""
+              accounts={accounts.filter((a) => !a.is_paramedic && !a.is_driver)}
+              onPick={fill}
+            />
             <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-              Development build only — never rendered in production. Create these with{" "}
+              Shown only while <code>DEBUG</code> is on. Created with{" "}
               <code>manage.py seed_users</code>.
             </div>
-          </div>
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+function AccountCard({
+  title,
+  subtitle,
+  accounts,
+  onPick,
+  showName = false,
+}: {
+  title: string;
+  subtitle: string;
+  accounts: DemoAccount[];
+  onPick: (username: string, password: string) => void;
+  showName?: boolean;
+}) {
+  if (accounts.length === 0) return null;
+  return (
+    <div className="card">
+      <h3>{title}</h3>
+      {subtitle && (
+        <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+          {subtitle}
+        </p>
+      )}
+      <table className="data">
+        <thead>
+          <tr>
+            {showName && <th>Name</th>}
+            <th>Username</th>
+            <th>Password</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          {accounts.map((account) => (
+            <tr
+              key={account.username}
+              onClick={() => onPick(account.username, account.password)}
+              style={{ cursor: "pointer" }}
+            >
+              {showName && (
+                <td>
+                  <b>{account.name}</b>
+                  {(account.staff_id || account.base_station) && (
+                    <div className="muted" style={{ fontSize: 10.5 }}>
+                      {[account.staff_id, account.base_station]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  )}
+                </td>
+              )}
+              <td className="mono">{account.username}</td>
+              <td className="mono">{account.password}</td>
+              <td>{account.role_labels.join(", ")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

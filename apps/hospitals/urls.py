@@ -15,5 +15,6 @@ router.register(
 urlpatterns = [
     path("recommend/", views.RecommendHospitalView.as_view(), name="hospital-recommend"),
     path("rule-lookup/<str:category>/", views.RuleLookupView.as_view(), name="hospital-rule-lookup"),
+    path("symptoms/", views.SymptomCatalogueView.as_view(), name="hospital-symptoms"),
     path("", include(router.urls)),
 ]

@@ -50,7 +50,7 @@ class WebSocketJWTTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_jwt_in_authorization_header_authenticates_the_socket(self):
-        user = await make_user("ws_hdr", Role.DISPATCHER)
+        user = await make_user("ws_hdr", Role.ADMIN)
         token = await issue_token(user)
 
         communicator = WebsocketCommunicator(
@@ -135,7 +135,7 @@ class WebSocketJWTTests(TransactionTestCase):
             )
 
         await seed()
-        police = await make_user("ws_cop", Role.TRAFFIC_POLICE)
+        police = await make_user("ws_cop", Role.ADMIN)
         token = await issue_token(police)
 
         communicator = WebsocketCommunicator(application, f"/ws/ops/?token={token}")

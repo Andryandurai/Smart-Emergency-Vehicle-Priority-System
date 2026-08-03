@@ -8,11 +8,27 @@
  */
 import L from "leaflet";
 import type { ReactNode } from "react";
-import { useEffect, useMemo } from "react";
-import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  CircleMarker,
+  MapContainer,
+  Marker,
+  Polyline,
+  Popup,
+  TileLayer,
+  Tooltip,
+  useMap,
+} from "react-leaflet";
 
-import type { SegmentCollection, VehiclePayload } from "@/api/types";
+import type { SegmentCollection, Trip, VehiclePayload } from "@/api/types";
 import { congestionColour, levelClass } from "@/components/ui";
+import {
+  TRAFFIC_BLOCKED,
+  TRAFFIC_FREE,
+  TRAFFIC_HEAVY,
+  TRAFFIC_SLIGHT,
+  signalPhaseColour,
+} from "@/components/map/layers";
 
 import "leaflet/dist/leaflet.css";
 
@@ -21,17 +37,125 @@ export const DEFAULT_ZOOM = 13;
 
 const VEHICLE_GLYPH: Record<string, string> = {
   ambulance: "A",
-  fire_engine: "F",
-  police: "P",
   disaster: "D",
 };
 
-export function vehicleIcon(level: number, type: string): L.DivIcon {
+export function vehicleIcon(
+  level: number,
+  type: string,
+  { heading = 0, focused = false }: { heading?: number; focused?: boolean } = {},
+): L.DivIcon {
+  // The heading arrow is a sibling of the badge rather than a rotation of it,
+  // so the glyph stays upright and readable while the arrow points where the
+  // vehicle is actually going.
   return L.divIcon({
     className: "",
-    html: `<div class="veh-marker ${levelClass(level)}">${VEHICLE_GLYPH[type] ?? "E"}</div>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
+    html:
+      `<div class="veh-pin${focused ? " focused" : ""}">` +
+      `<span class="veh-heading" style="transform: rotate(${heading}deg)"></span>` +
+      `<span class="veh-marker ${levelClass(level)}">${VEHICLE_GLYPH[type] ?? "E"}</span>` +
+      `</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
+}
+
+/**
+ * Hospital pin.
+ *
+ * A teardrop pin rather than a dot: hospitals are destinations an operator
+ * picks, and a pin reads as "a place you go" where a dot reads as "a reading
+ * taken here". It also survives being drawn on top of the road network, which
+ * a 7px circle does not.
+ */
+export function hospitalIcon(
+  { onDiversion = false, isTrauma = false }: { onDiversion?: boolean; isTrauma?: boolean } = {},
+): L.DivIcon {
+  const tone = onDiversion ? "diverted" : "open";
+  return L.divIcon({
+    className: "",
+    html:
+      `<div class="hosp-pin ${tone}${isTrauma ? " trauma" : ""}">` +
+      `<span class="hosp-glyph">${onDiversion ? "⊘" : "⚕"}</span>` +
+      `</div>`,
+    iconSize: [26, 34],
+    iconAnchor: [13, 34],
+    popupAnchor: [0, -30],
+  });
+}
+
+/**
+ * Traffic signal head, drawn as the three-lamp housing with the live aspect
+ * lit. Colour alone would be ambiguous against the congestion layer, which
+ * also uses red and amber; the housing shape is what makes a signal a signal.
+ */
+export function signalIcon(
+  phase: string,
+  { preempted = false, online = true }: { preempted?: boolean; online?: boolean } = {},
+): L.DivIcon {
+  const lamps = (["red", "amber", "green"] as const)
+    .map((lamp) => {
+      const lit =
+        online &&
+        (lamp === phase || (phase === "flashing_amber" && lamp === "amber"));
+      return `<i class="lamp ${lamp}${lit ? " lit" : ""}"></i>`;
+    })
+    .join("");
+  return L.divIcon({
+    className: "",
+    html:
+      `<div class="sig-head${preempted ? " preempted" : ""}${online ? "" : " offline"}"` +
+      ` style="--aspect:${signalPhaseColour(online ? phase : "off")}">${lamps}</div>`,
+    iconSize: [12, 28],
+    iconAnchor: [6, 14],
+    popupAnchor: [0, -14],
+  });
+}
+
+/**
+ * Road disruption: a hazard triangle, the sign every road user already knows.
+ *
+ * ``blocking`` distinguishes "the road is shut" from "something is slowing it
+ * down" - the two demand different decisions from a dispatcher and used to be
+ * two shades of the same orange dot.
+ */
+export function disruptionIcon(
+  { blocking = false, highlighted = false }: { blocking?: boolean; highlighted?: boolean } = {},
+): L.DivIcon {
+  return L.divIcon({
+    className: "",
+    html:
+      `<div class="warn-pin${blocking ? " blocking" : ""}${highlighted ? " lit" : ""}">` +
+      `<span class="warn-glyph">!</span></div>`,
+    iconSize: [26, 24],
+    iconAnchor: [13, 20],
+    popupAnchor: [0, -18],
+  });
+}
+
+/** Variable message sign, drawn as the screen it is. */
+export function boardIcon({ alerting = false }: { alerting?: boolean } = {}): L.DivIcon {
+  return L.divIcon({
+    className: "",
+    html:
+      `<div class="board-pin${alerting ? " alerting" : ""}">` +
+      `<span class="board-screen"></span><span class="board-stand"></span></div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 22],
+    popupAnchor: [0, -20],
+  });
+}
+
+/** CCTV camera: body, lens and mount bracket. */
+export function cameraIcon({ active = true }: { active?: boolean } = {}): L.DivIcon {
+  return L.divIcon({
+    className: "",
+    html:
+      `<div class="cam-pin${active ? "" : " idle"}">` +
+      `<span class="cam-body"><i class="cam-lens"></i></span><span class="cam-mount"></span></div>`,
+    iconSize: [24, 20],
+    iconAnchor: [12, 16],
+    popupAnchor: [0, -14],
   });
 }
 
@@ -60,7 +184,33 @@ export function MapCanvas({
 }) {
   const tiles = basemap ?? FALLBACK_BASEMAP;
   return (
-    <MapContainer center={centre} zoom={zoom} className={className} preferCanvas>
+    <MapContainer
+      center={centre}
+      zoom={zoom}
+      className={className}
+      // Canvas rather than SVG: the seeded network is ~4,000 polylines, and an
+      // SVG path per segment makes the browser re-layout the whole overlay on
+      // every pan.
+      preferCanvas
+      // Pan/zoom feel. Leaflet's defaults are tuned for a document with a map
+      // in it; this is a console where the map IS the document, so inertia is
+      // shortened (a flick should stop where you let go, not coast past the
+      // junction you were aiming at) and wheel zoom is made continuous rather
+      // than one-step-per-notch.
+      zoomControl
+      inertia
+      inertiaDeceleration={2600}
+      inertiaMaxSpeed={2400}
+      easeLinearity={0.28}
+      wheelDebounceTime={24}
+      wheelPxPerZoomLevel={110}
+      zoomSnap={0.5}
+      zoomDelta={0.5}
+      zoomAnimation
+      markerZoomAnimation={false}
+      maxZoom={19}
+    >
+      <MapResizeGuard />
       <TileLayer
         // Keyed on the URL so switching provider replaces the layer rather
         // than mutating it - Leaflet caches tiles per layer instance.
@@ -75,12 +225,77 @@ export function MapCanvas({
   );
 }
 
-/** Pans the map when a vehicle is being followed. */
-export function FollowVehicle({ position }: { position: [number, number] | null }) {
+/**
+ * Keeps Leaflet's cached container size honest.
+ *
+ * Leaflet measures its container once on init. The console mounts the map
+ * inside a CSS grid that settles a frame later, and the sidebar can change
+ * width - after which every pointer event is offset from where it looks like
+ * it landed, so dragging "sticks" and zoom recentres on the wrong point. This
+ * was the actual cause of the map feeling unresponsive to drags.
+ */
+function MapResizeGuard() {
   const map = useMap();
   useEffect(() => {
-    if (position) map.panTo(position, { animate: true });
-  }, [map, position]);
+    const container = map.getContainer();
+    const invalidate = () => map.invalidateSize({ animate: false });
+
+    // Settle after the first paint, when the grid has resolved.
+    const raf = window.requestAnimationFrame(invalidate);
+    const observer = new ResizeObserver(invalidate);
+    observer.observe(container);
+    window.addEventListener("resize", invalidate);
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", invalidate);
+    };
+  }, [map]);
+  return null;
+}
+
+/**
+ * Pans the map when a vehicle is being followed.
+ *
+ * Deliberately yields to the operator: while a drag or zoom is in progress,
+ * and for a moment afterwards, following is suspended. Otherwise every
+ * telemetry fix yanks the viewport back and the map cannot be explored at all
+ * — which is what "the map doesn't move where I drag it" actually was.
+ */
+export function FollowVehicle({
+  position,
+  enabled = true,
+}: {
+  position: [number, number] | null;
+  enabled?: boolean;
+}) {
+  const map = useMap();
+  const interacting = useRef(0);
+
+  useEffect(() => {
+    const touch = () => {
+      interacting.current = Date.now();
+    };
+    map.on("dragstart", touch);
+    map.on("drag", touch);
+    map.on("zoomstart", touch);
+    return () => {
+      map.off("dragstart", touch);
+      map.off("drag", touch);
+      map.off("zoomstart", touch);
+    };
+  }, [map]);
+
+  useEffect(() => {
+    if (!enabled || !position) return;
+    if (Date.now() - interacting.current < 6000) return;
+    // Only recentre once the vehicle is genuinely drifting out of view;
+    // panning on every fix makes the whole map twitch.
+    if (map.getBounds().pad(-0.25).contains(position)) return;
+    map.panTo(position, { animate: true, duration: 0.6 });
+  }, [map, position, enabled]);
+
   return null;
 }
 
@@ -97,29 +312,66 @@ export function FitBounds({ points }: { points: [number, number][] }) {
 export function VehicleMarkers({
   vehicles,
   onSelect,
+  focusedCallsign = null,
+  /** Trip keyed by callsign, so the hover card can name the emergency and the
+   *  receiving hospital - neither of which the fleet payload knows about. */
+  tripsByCallsign,
 }: {
   vehicles: VehiclePayload[];
   onSelect?: (callsign: string) => void;
+  focusedCallsign?: string | null;
+  tripsByCallsign?: Record<string, Trip>;
 }) {
   return (
     <>
-      {vehicles.map((vehicle) => (
-        <Marker
-          key={vehicle.callsign}
-          position={[vehicle.latitude, vehicle.longitude]}
-          icon={vehicleIcon(vehicle.priority_level, vehicle.vehicle_type)}
-          zIndexOffset={1000}
-          eventHandlers={onSelect ? { click: () => onSelect(vehicle.callsign) } : undefined}
-        >
-          <Popup>
-            <b>{vehicle.callsign}</b>
-            <br />
-            {vehicle.status} · {Math.round(vehicle.speed_kmh)} km/h
-            <br />
-            siren: {vehicle.siren_mode}
-          </Popup>
-        </Marker>
-      ))}
+      {vehicles.map((vehicle) => {
+        const trip = tripsByCallsign?.[vehicle.callsign];
+        const focused = focusedCallsign === vehicle.callsign;
+        return (
+          <Marker
+            key={vehicle.callsign}
+            position={[vehicle.latitude, vehicle.longitude]}
+            icon={vehicleIcon(vehicle.priority_level, vehicle.vehicle_type, {
+              heading: vehicle.heading_deg,
+              focused,
+            })}
+            zIndexOffset={focused ? 2000 : 1000}
+            eventHandlers={onSelect ? { click: () => onSelect(vehicle.callsign) } : undefined}
+          >
+            {/* Hover card. `sticky` follows the pointer so it never covers the
+                vehicle it describes, which matters when several are close. */}
+            <Tooltip direction="top" offset={[0, -16]} opacity={1} sticky className="veh-tip">
+              <div className="veh-tip-body">
+                <div className="veh-tip-head">
+                  <b>{vehicle.callsign}</b>
+                  <span className={`veh-tip-level ${levelClass(vehicle.priority_level)}`}>
+                    L{vehicle.priority_level}
+                  </span>
+                </div>
+                {vehicle.registration && (
+                  <div className="veh-tip-row mono">{vehicle.registration}</div>
+                )}
+                <div className="veh-tip-row">
+                  <span className="k">Speed</span>
+                  <b>{Math.round(vehicle.speed_kmh)} km/h</b>
+                </div>
+                <div className="veh-tip-row">
+                  <span className="k">Emergency</span>
+                  <b>{trip?.category_display || trip?.emergency_category || "—"}</b>
+                </div>
+                <div className="veh-tip-row">
+                  <span className="k">Destination</span>
+                  <b>{trip?.hospital_name ?? "not yet assigned"}</b>
+                </div>
+                <div className="veh-tip-row">
+                  <span className="k">Status</span>
+                  <b>{trip?.stage_display || vehicle.status_display || vehicle.status}</b>
+                </div>
+              </div>
+            </Tooltip>
+          </Marker>
+        );
+      })}
     </>
   );
 }
@@ -168,13 +420,95 @@ export function SegmentsLayer({ collection }: { collection: SegmentCollection | 
   );
 }
 
-export function RouteLine({ geometry }: { geometry: [number, number][] }) {
+/** Vibrant blue for a selected vehicle's route - reads over dark red and purple. */
+export const ROUTE_BLUE = "#00b0ff";
+
+/**
+ * The active route, drawn Google-style: a solid casing under a blue dotted
+ * line. The casing is what makes the dots legible over both the dark basemap
+ * and a red congested road - a bare dashed line disappears over either.
+ */
+export function RouteLine({
+  geometry,
+  colour = ROUTE_BLUE,
+}: {
+  geometry: [number, number][];
+  colour?: string;
+}) {
   if (geometry.length < 2) return null;
   return (
-    <Polyline
-      positions={geometry}
-      pathOptions={{ color: "#4da3ff", weight: 5, opacity: 0.8, dashArray: "1 8" }}
-    />
+    <>
+      <Polyline
+        positions={geometry}
+        pathOptions={{ color: "#0b1a2b", weight: 11, opacity: 0.75, lineCap: "round" }}
+      />
+      <Polyline
+        positions={geometry}
+        pathOptions={{
+          color: colour,
+          weight: 6,
+          opacity: 0.95,
+          dashArray: "1 11",
+          lineCap: "round",
+        }}
+      />
+    </>
+  );
+}
+
+/** Start/end caps for a focused route, so its extent is unambiguous. */
+export function RouteEndpoints({
+  geometry,
+  destinationLabel,
+}: {
+  geometry: [number, number][];
+  destinationLabel?: string | null;
+}) {
+  if (geometry.length < 2) return null;
+  const end = geometry[geometry.length - 1]!;
+  return (
+    <CircleMarker
+      center={end}
+      radius={6}
+      pathOptions={{ color: "#ffffff", fillColor: "#4da3ff", fillOpacity: 1, weight: 2 }}
+    >
+      {destinationLabel && <Popup>{destinationLabel}</Popup>}
+    </CircleMarker>
+  );
+}
+
+/** A hospital drawn as a pin. See {@link hospitalIcon}. */
+export function HospitalPin({
+  position,
+  name,
+  detail,
+  onDiversion = false,
+  isTrauma = false,
+  onClick,
+}: {
+  position: [number, number];
+  name: string;
+  detail?: ReactNode;
+  onDiversion?: boolean;
+  isTrauma?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <Marker
+      position={position}
+      icon={hospitalIcon({ onDiversion, isTrauma })}
+      zIndexOffset={500}
+      eventHandlers={onClick ? { click: onClick } : undefined}
+    >
+      <Tooltip direction="top" offset={[0, -34]} opacity={1} className="veh-tip">
+        <div className="veh-tip-body">
+          <div className="veh-tip-head">
+            <b>{name}</b>
+          </div>
+          {detail}
+        </div>
+      </Tooltip>
+    </Marker>
   );
 }
 
@@ -198,6 +532,56 @@ export function Dot({
       {children && <Popup>{children}</Popup>}
     </CircleMarker>
   );
+}
+
+/**
+ * Flies to a disruption and rings it, for "click it in the list, find it on
+ * the map". The ring is drawn imperatively so it sits above every layer
+ * regardless of which are switched on.
+ */
+export function DisruptionSpotlight({
+  event,
+  onClear,
+}: {
+  event: { id: number; latitude: number; longitude: number; event_type_display?: string; description?: string; blocks_road?: boolean };
+  onClear?: () => void;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    const position: [number, number] = [event.latitude, event.longitude];
+    // Only zoom in if the operator is currently further out - yanking a
+    // close-in view back to z16 loses the detail they were looking at.
+    map.flyTo(position, Math.max(map.getZoom(), 16), { duration: 0.8 });
+
+    // An explicit SVG renderer, because the map runs with `preferCanvas` for
+    // the 4,000-segment road layer - and a canvas-rendered circle has no DOM
+    // node, so `className` never lands anywhere and the pulse cannot animate.
+    const ring = L.circleMarker(position, {
+      renderer: L.svg(),
+      radius: 26,
+      color: event.blocks_road ? "#a259ff" : "#ff9f43",
+      weight: 3,
+      fill: false,
+      className: "spotlight-ring",
+      interactive: false,
+    }).addTo(map);
+
+    return () => {
+      ring.remove();
+    };
+  }, [map, event.id, event.latitude, event.longitude, event.blocks_road]);
+
+  useEffect(() => {
+    if (!onClear) return;
+    // Clicking bare map dismisses the spotlight, the way any selection should.
+    map.on("click", onClear);
+    return () => {
+      map.off("click", onClear);
+    };
+  }, [map, onClear]);
+
+  return null;
 }
 
 export function AlertCircle({
@@ -226,15 +610,48 @@ export function AlertCircle({
   return null;
 }
 
+/**
+ * Map key.
+ *
+ * Grouped by what the symbol *is* rather than by colour, because the same
+ * colour legitimately means different things in different groups - red is a
+ * jammed road, a stopped signal and a level-1 vehicle, and an operator needs
+ * the shape to disambiguate. Each group states its own shape.
+ */
 export function MapLegend() {
   return (
     <div className="legend map-legend">
-      <div><span className="k" style={{ background: "#ff4d4f" }} />Level 1 critical</div>
-      <div><span className="k" style={{ background: "#ff9f43" }} />Level 2 high</div>
-      <div><span className="k" style={{ background: "#ffd166" }} />Level 3 moderate</div>
-      <div><span className="k" style={{ background: "#7f8c9b" }} />Level 4 transport</div>
-      <div><span className="k" style={{ background: "#2ecc71" }} />Signal held green</div>
-      <div><span className="k" style={{ background: "#e74c3c" }} />Congested / blocked</div>
+      <div className="legend-group">
+        <h5>Traffic flow</h5>
+        <div><span className="k bar" style={{ background: TRAFFIC_FREE }} />Clear</div>
+        <div><span className="k bar" style={{ background: TRAFFIC_SLIGHT }} />Slow</div>
+        <div><span className="k bar" style={{ background: TRAFFIC_HEAVY }} />Heavy</div>
+        <div><span className="k bar" style={{ background: TRAFFIC_BLOCKED }} />Road closed</div>
+      </div>
+
+      <div className="legend-group">
+        <h5>Signals</h5>
+        <div><span className="k lamp" style={{ background: "#ff3b30" }} />Red</div>
+        <div><span className="k lamp" style={{ background: "#ffab00" }} />Amber</div>
+        <div><span className="k lamp" style={{ background: "#34c759" }} />Green</div>
+        <div><span className="k lamp haloed" style={{ background: "#34c759" }} />Held for corridor</div>
+      </div>
+
+      <div className="legend-group">
+        <h5>Ambulances</h5>
+        <div><span className="k round" style={{ background: "#ff4d4f" }} />L1 critical</div>
+        <div><span className="k round" style={{ background: "#ff9f43" }} />L2 high</div>
+        <div><span className="k round" style={{ background: "#ffd166" }} />L3 moderate</div>
+        <div><span className="k round" style={{ background: "#7f8c9b" }} />L4 transport</div>
+      </div>
+
+      <div className="legend-group">
+        <h5>Places &amp; markers</h5>
+        <div><span className="k pin" style={{ background: "#2ecc71" }} />Hospital</div>
+        <div><span className="k pin" style={{ background: "#e74c3c" }} />On diversion</div>
+        <div><span className="k warn" />Disruption</div>
+        <div><span className="k route" />Selected route</div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,12 @@
 from rest_framework import serializers
 
-from apps.core.enums import EmergencyCategory, PriorityLevel, TripStage
+from apps.core.enums import (
+    EmergencyCategory,
+    HospitalChoiceReason,
+    PatientSymptom,
+    PriorityLevel,
+    TripStage,
+)
 from apps.dispatch.models import EmergencyTrip, PriorityDirective, RoutePlan, SignalPreemption
 
 
@@ -73,6 +79,11 @@ PHI_FIELDS = (
     "patient_age",
     "patient_notes",
     "patient_deteriorating",
+    # Symptoms describe the patient's condition as directly as a diagnosis
+    # does - "unconscious, bleeding" is clinical information, and the corridor
+    # operator running the signals has no business seeing it.
+    "symptoms",
+    "symptom_labels",
     "caller_number",
     "incident_address",
 )
@@ -126,6 +137,48 @@ class EmergencyTripSerializer(ClinicalRedactionMixin, serializers.ModelSerialize
     active_route = RoutePlanSummarySerializer(read_only=True)
     response_time_s = serializers.FloatField(read_only=True)
     transport_time_s = serializers.FloatField(read_only=True)
+    symptom_labels = serializers.ListField(read_only=True)
+    choice_reason_display = serializers.CharField(
+        source="get_hospital_choice_reason_display", read_only=True
+    )
+    # --- Driver module: what the receiving hospital wants to know ----------
+    # Not PHI - who is driving and how the corridor is running are logistics,
+    # and a charge nurse expecting an ambulance needs both.
+    driver_name = serializers.SerializerMethodField()
+    vehicle_registration = serializers.CharField(
+        source="vehicle.registration", read_only=True
+    )
+    vehicle_readiness = serializers.CharField(source="vehicle.readiness", read_only=True)
+    corridor_progress = serializers.SerializerMethodField()
+
+    def get_driver_name(self, obj) -> str | None:
+        shift = next(
+            (s for s in obj.vehicle.shifts.all() if s.status == "active"), None
+        ) if hasattr(obj.vehicle, "_prefetched_objects_cache") else (
+            obj.vehicle.shifts.filter(status="active").first()
+        )
+        if shift is None:
+            return None
+        return shift.driver.get_full_name() or shift.driver.get_username()
+
+    def get_corridor_progress(self, obj) -> dict:
+        """How much of the green corridor has actually run.
+
+        Counted rather than described: "3 of 7 junctions held" tells a
+        hospital whether the ETA is being achieved, where "corridor active"
+        does not.
+        """
+        rows = list(obj.preemptions.all()) if hasattr(
+            obj, "_prefetched_objects_cache"
+        ) else list(obj.preemptions.all())
+        if not rows:
+            return {"total": 0, "held": 0, "failed": 0, "pending": 0}
+        return {
+            "total": len(rows),
+            "held": sum(1 for r in rows if r.state in {"active", "released"}),
+            "failed": sum(1 for r in rows if r.state == "failed"),
+            "pending": sum(1 for r in rows if r.state in {"planned", "armed"}),
+        }
 
     class Meta:
         model = EmergencyTrip
@@ -135,10 +188,14 @@ class EmergencyTripSerializer(ClinicalRedactionMixin, serializers.ModelSerialize
             "stage", "stage_display", "emergency_category", "category_display",
             "incident_latitude", "incident_longitude", "incident_address", "caller_number",
             "patient_age", "patient_notes", "patient_deteriorating",
+            "symptoms", "symptom_labels",
             "destination_hospital", "hospital_code", "hospital_name",
             "destination_latitude", "destination_longitude", "hospital_was_overridden",
+            "hospital_choice_reason", "choice_reason_display", "hospital_choice_note",
             "priority_level", "siren_mode", "light_pattern", "allow_contraflow",
             "eta", "distance_remaining_m", "active_route",
+            "driver_name", "vehicle_registration", "vehicle_readiness",
+            "corridor_progress",
             "dispatched_at", "arrived_scene_at", "departed_scene_at",
             "arrived_hospital_at", "handover_at", "cancelled_at", "cancellation_reason",
             "response_time_s", "transport_time_s", "created_at",
@@ -178,18 +235,43 @@ class AssessPatientSerializer(serializers.Serializer):
     """Paramedic's on-scene assessment - the Layer 5 / Layer 6 trigger."""
 
     emergency_category = serializers.ChoiceField(choices=EmergencyCategory.choices)
+    #: What the crew can actually see. Always accepted, and the only clinical
+    #: input when the category is UNDETERMINED.
+    symptoms = serializers.ListField(
+        child=serializers.ChoiceField(choices=PatientSymptom.choices),
+        required=False,
+        allow_empty=True,
+    )
     patient_age = serializers.IntegerField(required=False, min_value=0, max_value=130)
     patient_notes = serializers.CharField(required=False, allow_blank=True)
     patient_deteriorating = serializers.BooleanField(default=False)
     #: Crew may override the recommendation; the reason is mandatory if so.
     hospital_id = serializers.IntegerField(required=False)
     override_reason = serializers.CharField(required=False, allow_blank=True, max_length=300)
+    choice_reason = serializers.ChoiceField(
+        choices=HospitalChoiceReason.choices, required=False,
+    )
     allow_contraflow = serializers.BooleanField(required=False)
 
     def validate(self, attrs):
         if attrs.get("hospital_id") and not attrs.get("override_reason"):
             raise serializers.ValidationError(
                 {"override_reason": "A reason is required when overriding the recommendation."}
+            )
+        # An undetermined category with nothing observed gives the recommender
+        # no clinical input at all - it would return the nearest emergency
+        # department and call it a decision. Refuse rather than pretend.
+        if (
+            attrs.get("emergency_category") == EmergencyCategory.UNKNOWN
+            and not attrs.get("symptoms")
+        ):
+            raise serializers.ValidationError(
+                {
+                    "symptoms": (
+                        "Select at least one symptom when the emergency category is "
+                        "undetermined - otherwise there is nothing to match a hospital on."
+                    )
+                }
             )
         return attrs
 

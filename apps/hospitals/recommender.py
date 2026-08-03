@@ -27,7 +27,7 @@ from django.utils import timezone
 from apps.brain.router import estimate_travel_time_s
 from apps.core.enums import HospitalFacility, PriorityLevel
 from apps.core.geo import Point, haversine_m
-from apps.hospitals.rules import ResolvedRule, resolve_rule
+from apps.hospitals.rules import ResolvedRule, resolve_rule, resolve_rule_for
 
 log = logging.getLogger("sevps.hospitals")
 
@@ -187,12 +187,17 @@ def recommend_hospital(
     radius_km: float | None = None,
     max_candidates: int | None = None,
     exclude_hospital_ids: set[int] | None = None,
+    symptoms=None,
 ) -> Recommendation:
-    """Recommend the most suitable hospital for a patient at ``origin``."""
+    """Recommend the most suitable hospital for a patient at ``origin``.
+
+    ``symptoms`` are the crew's observations. They tighten the rule rather
+    than replace it - see :func:`~apps.hospitals.rules.resolve_rule_for`.
+    """
     from apps.hospitals.models import Hospital
 
     cfg = settings.SEVPS
-    rule = resolve_rule(category)
+    rule = resolve_rule_for(category, symptoms)
     priority_level = priority_level or rule.priority_level
     radius_m = (radius_km or cfg["HOSPITAL_SEARCH_RADIUS_KM"]) * 1000
     limit = max_candidates or cfg["HOSPITAL_MAX_CANDIDATES"]

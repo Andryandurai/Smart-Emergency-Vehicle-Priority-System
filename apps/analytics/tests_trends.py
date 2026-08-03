@@ -390,7 +390,7 @@ class ChartEndpointTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user("analyst", password="pw")
-        group, _ = Group.objects.get_or_create(name=Role.TRAFFIC_POLICE)
+        group, _ = Group.objects.get_or_create(name=Role.ADMIN)
         cls.user.groups.add(group)
 
     ENDPOINTS = (

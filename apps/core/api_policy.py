@@ -40,6 +40,12 @@ PUBLIC_READ_ENDPOINTS: dict[str, str] = {
     ),
     "api-root": "DRF router index - endpoint names only, no data.",
     "auth-roles": "Static role catalogue; helps clients render login UI.",
+    "auth-demo-accounts": (
+        "Seeded demo credentials shown on the login screen for testing. Served "
+        "only when DEBUG is on, and the same passwords are already published in "
+        "seed_users.py - which itself refuses to create them outside DEBUG. "
+        "Returns an empty list in production."
+    ),
     # --- Layer 4: road users and roadside infrastructure ------------------
     "alerts-nearby": (
         "A road user's phone must receive an approaching-ambulance warning "
@@ -75,6 +81,12 @@ PUBLIC_READ_ENDPOINTS: dict[str, str] = {
         "returns public hospital capability - no patient record is involved."
     ),
     "hospital-rule-lookup": "Clinical rule catalogue; published reference data.",
+    "hospital-symptoms": (
+        "Symptom picker contents and what each observation implies for hospital "
+        "matching. Clinical configuration, not patient data - and a crew on an "
+        "unauthenticated fallback device must still be able to record what they "
+        "can see. Matches the existing rule-catalogue decision."
+    ),
     "dispatch-priority-profiles": "Static Layer 6 documentation of the four levels.",
     "ml-models": "Which models are trained; no data, only availability.",
     "cv-status": "CV backend and camera-estate counters; no imagery, no detections.",

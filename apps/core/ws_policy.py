@@ -74,7 +74,7 @@ OPS_POLICY = ConsumerPolicy(
 
 VEHICLE_POLICY = ConsumerPolicy(
     name="vehicle",
-    required_roles=(Role.AMBULANCE, Role.DISPATCHER, Role.TRAFFIC_POLICE, Role.ADMIN),
+    required_roles=(Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN),
     accepts_commands=True,   # telemetry is pushed up this socket
     carries_clinical_data=True,
     reason=(
@@ -87,7 +87,7 @@ VEHICLE_POLICY = ConsumerPolicy(
 
 HOSPITAL_POLICY = ConsumerPolicy(
     name="hospital",
-    required_roles=(Role.HOSPITAL, Role.DISPATCHER, Role.AMBULANCE, Role.ADMIN),
+    required_roles=(Role.HOSPITAL, Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN),
     carries_clinical_data=True,
     reason=(
         "Pre-arrival patient feed: emergency category, age, clinical notes and "
@@ -98,7 +98,7 @@ HOSPITAL_POLICY = ConsumerPolicy(
 
 SIGNALS_POLICY = ConsumerPolicy(
     name="signals",
-    required_roles=(Role.TRAFFIC_POLICE, Role.ADMIN),
+    required_roles=(Role.ADMIN,),
     accepts_commands=True,
     reason=(
         "Bridge to physical traffic controllers. Receives green/release "

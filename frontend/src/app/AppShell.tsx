@@ -12,9 +12,14 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: "/", label: "Operations", authOnly: true },
+  { to: "/fleet", label: "Fleet", authOnly: true },
   { to: "/hospitals", label: "Hospitals", authOnly: true },
   { to: "/paramedic", label: "Paramedic", authOnly: true },
-  { to: "/driver", label: "Driver" },
+  // Two different screens that both concern drivers. "Driver" is the
+  // in-vehicle console at /drive; "Road Alerts" is the public receiver that
+  // has always lived at /driver and warns civilians an ambulance is coming.
+  { to: "/drive", label: "Driver", authOnly: true },
+  { to: "/driver", label: "Road Alerts" },
   { to: "/boards", label: "Boards" },
   { to: "/analytics", label: "Analytics", authOnly: true },
   { to: "/settings", label: "Settings", authOnly: true },

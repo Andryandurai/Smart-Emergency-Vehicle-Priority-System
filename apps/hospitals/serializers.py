@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.core.enums import EmergencyCategory
+from apps.core.enums import EmergencyCategory, PatientSymptom
 from apps.hospitals.models import (
     EmergencyRule,
     Hospital,
@@ -84,6 +84,13 @@ class RecommendationRequestSerializer(serializers.Serializer):
     latitude = serializers.FloatField(min_value=-90, max_value=90)
     longitude = serializers.FloatField(min_value=-180, max_value=180)
     emergency_category = serializers.ChoiceField(choices=EmergencyCategory.choices)
+    #: Observed symptoms. Tighten the rule the category supplies, and are the
+    #: whole clinical input when the category is undetermined.
+    symptoms = serializers.ListField(
+        child=serializers.ChoiceField(choices=PatientSymptom.choices),
+        required=False,
+        allow_empty=True,
+    )
     radius_km = serializers.FloatField(required=False, min_value=1, max_value=100)
     max_candidates = serializers.IntegerField(required=False, min_value=1, max_value=25)
     exclude_hospital_ids = serializers.ListField(
@@ -98,12 +105,21 @@ class HospitalAlertSerializer(serializers.ModelSerializer):
     )
     is_acknowledged = serializers.BooleanField(read_only=True)
     vehicle_callsign = serializers.CharField(source="trip.vehicle.callsign", read_only=True)
+    symptom_labels = serializers.SerializerMethodField()
+
+    def get_symptom_labels(self, obj) -> list[str]:
+        """Readable names, ordered by the enum rather than by arrival order."""
+        from apps.core.enums import PatientSymptom
+
+        selected = set(obj.symptoms or [])
+        return [label for value, label in PatientSymptom.choices if value in selected]
 
     class Meta:
         model = HospitalAlert
         fields = [
             "id", "uuid", "hospital", "hospital_name", "trip", "vehicle_callsign",
-            "emergency_category", "category_display", "priority_level", "eta",
+            "emergency_category", "category_display", "symptoms", "symptom_labels",
+            "priority_level", "eta",
             "distance_remaining_m", "message", "acknowledged_at", "acknowledged_by",
             "is_acknowledged", "preparation_notes", "created_at",
         ]

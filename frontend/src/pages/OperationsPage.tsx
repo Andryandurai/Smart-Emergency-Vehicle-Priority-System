@@ -1,16 +1,21 @@
 /** Emergency Operations Dashboard - feature 4.11. */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import type { DriverAlert, Trip, VehiclePayload } from "@/api/types";
+import type { DriverAlert, RoadEvent, Trip, VehiclePayload } from "@/api/types";
 import {
   AlertCircle,
+  DisruptionSpotlight,
   FollowVehicle,
   MapCanvas,
   MapLegend,
+  ROUTE_BLUE,
+  RouteEndpoints,
+  RouteLine,
   VehicleMarkers,
 } from "@/components/MapCanvas";
 import { GisLayer } from "@/components/map/GisLayer";
+import { TrafficLayer } from "@/components/map/TrafficLayer";
 import { LayerControl } from "@/components/map/LayerControl";
 import { useGisLayers } from "@/hooks/useGisLayers";
 import { useAuthStore } from "@/stores/authStore";
@@ -39,6 +44,8 @@ import {
   useOpsStore,
 } from "@/stores/opsStore";
 
+const ALERT_ZONES_KEY = "sevps.showAlertZones";
+
 export function OperationsPage() {
   const store = useOpsStore();
   // useShallow is required, not stylistic: these selectors build a new array
@@ -54,13 +61,33 @@ export function OperationsPage() {
   const authenticated = useAuthStore((state) => state.status === "authenticated");
   const [basemapId, setBasemapId] = useState<string>("");
 
-  // ETAs are relative, so the list re-renders once a second even when no data
-  // has changed. Cheap, and it keeps the countdown honest.
-  const [, setTick] = useState(0);
+  // The disruption the operator has picked out of the list, drawn emphasised.
+  const [highlightedEvent, setHighlightedEvent] = useState<RoadEvent | null>(null);
+  // Which trip card was clicked - see the focusedTrip note below.
+  const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(timer);
+  /**
+   * Driver alert zones - the large translucent circles.
+   *
+   * Off by default now. They are the Layer 4 broadcast radius around each
+   * warned vehicle, and with several responses running they covered most of
+   * the city centre in overlapping orange, hiding the traffic and signals
+   * underneath. Still one toggle away for anyone checking alert coverage.
+   */
+  const [showAlertZones, setShowAlertZones] = useState<boolean>(
+    () => window.localStorage.getItem(ALERT_ZONES_KEY) === "1",
+  );
+
+  const toggleAlertZones = useCallback(() => {
+    setShowAlertZones((on) => {
+      const next = !on;
+      try {
+        window.localStorage.setItem(ALERT_ZONES_KEY, next ? "1" : "0");
+      } catch {
+        // Private browsing; the toggle still works for this session.
+      }
+      return next;
+    });
   }, []);
 
   // Adopt the server's default basemap once the catalogue arrives, unless the
@@ -154,10 +181,68 @@ export function OperationsPage() {
     },
   });
 
+  const focusedCallsign = store.followedCallsign;
+
   const followed = useMemo(
-    () => vehicles.find((vehicle) => vehicle.callsign === store.followedCallsign) ?? null,
-    [vehicles, store.followedCallsign],
+    () => vehicles.find((vehicle) => vehicle.callsign === focusedCallsign) ?? null,
+    [vehicles, focusedCallsign],
   );
+
+  /**
+   * The trip being tracked.
+   *
+   * Keyed on trip id, not callsign: one ambulance can legitimately hold more
+   * than one active trip (a handover still open while the next dispatch is
+   * created), and resolving by callsign alone highlighted both cards and drew
+   * whichever route happened to sort first. Falls back to the newest trip for
+   * the callsign when focus arrived from the map marker, which knows only the
+   * vehicle.
+   */
+  const focusedTrip = useMemo(() => {
+    if (!focusedCallsign) return null;
+    const byId = trips.find((trip) => trip.id === selectedTripId);
+    if (byId && byId.vehicle_callsign === focusedCallsign) return byId;
+    const forVehicle = trips.filter((trip) => trip.vehicle_callsign === focusedCallsign);
+    return forVehicle.length
+      ? forVehicle.reduce((newest, trip) => (trip.id > newest.id ? trip : newest))
+      : null;
+  }, [trips, focusedCallsign, selectedTripId]);
+
+  const selectTrip = useCallback(
+    (trip: Trip) => {
+      setSelectedTripId(trip.id);
+      store.follow(trip.vehicle_callsign);
+    },
+    [store],
+  );
+
+  const clearFocus = useCallback(() => {
+    setSelectedTripId(null);
+    store.follow(null);
+  }, [store]);
+
+  // Focus mode: one vehicle on the map, everything else hidden. Requested so
+  // an operator tracking a single response is not reading nine markers to find
+  // it. Cleared by "Show all emergency vehicles".
+  const shownVehicles = useMemo(
+    () => (focusedCallsign ? vehicles.filter((v) => v.callsign === focusedCallsign) : vehicles),
+    [vehicles, focusedCallsign],
+  );
+
+  // Keyed lookup so each marker's hover card can name its emergency and
+  // destination without scanning the trip list per marker.
+  const tripsByCallsign = useMemo(() => {
+    const index: Record<string, Trip> = {};
+    for (const trip of trips) index[trip.vehicle_callsign] = trip;
+    return index;
+  }, [trips]);
+
+  const focusedRoute = focusedTrip?.active_route?.geometry ?? [];
+
+  // Clicking a disruption in the list flies to it and lights up its marker.
+  // Re-clicking the same one clears, so the list doubles as a toggle.
+  const selectDisruption = (event: RoadEvent) =>
+    setHighlightedEvent((current) => (current?.id === event.id ? null : event));
 
   return (
     <div className="split wide">
@@ -179,10 +264,25 @@ export function OperationsPage() {
         </div>
 
         <Card title="Active emergency vehicles">
+          {focusedCallsign ? (
+            <button type="button" className="ghost show-all" onClick={clearFocus}>
+              ← Show all emergency vehicles
+            </button>
+          ) : (
+            trips.length > 0 && <p className="hint">Tap one to track it on the map.</p>
+          )}
           {trips.length === 0 ? (
             <Empty>No active trips. Start one from the Paramedic screen or run the simulator.</Empty>
           ) : (
-            trips.map((trip) => <TripCard key={trip.id} trip={trip} onSelect={store.follow} />)
+            trips.map((trip) => (
+              <TripCard
+                key={trip.id}
+                trip={trip}
+                selected={trip.id === focusedTrip?.id}
+                dimmed={focusedTrip !== null && trip.id !== focusedTrip.id}
+                onSelect={() => selectTrip(trip)}
+              />
+            ))
           )}
         </Card>
 
@@ -221,19 +321,33 @@ export function OperationsPage() {
           {store.events.length === 0 ? (
             <Empty>Network clear.</Empty>
           ) : (
-            store.events.slice(0, 12).map((event) => (
-              <div key={event.id} className={`trip ${event.blocks_road ? "l1" : "l3"}`}>
-                <div className="head">
-                  <span className="ref">{event.event_type_display || event.event_type}</span>
-                  <Badge tone={event.blocks_road ? "bad" : "warn"}>
-                    {Math.round(event.severity * 100)}%
-                  </Badge>
+            <>
+              <p className="hint">Tap one to find it on the map.</p>
+              {store.events.slice(0, 12).map((event) => (
+                <div
+                  key={event.id}
+                  className={`trip clickable ${event.blocks_road ? "l1" : "l3"}${
+                    highlightedEvent?.id === event.id ? " selected" : ""
+                  }`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => selectDisruption(event)}
+                  onKeyDown={(keyEvent) => {
+                    if (keyEvent.key === "Enter") selectDisruption(event);
+                  }}
+                >
+                  <div className="head">
+                    <span className="ref">{event.event_type_display || event.event_type}</span>
+                    <Badge tone={event.blocks_road ? "bad" : "warn"}>
+                      {event.blocks_road ? "road closed" : `${Math.round(event.severity * 100)}%`}
+                    </Badge>
+                  </div>
+                  <div className="meta">
+                    {event.description || "reported"} · source: {event.source}
+                  </div>
                 </div>
-                <div className="meta">
-                  {event.description || "reported"} · source: {event.source}
-                </div>
-              </div>
-            ))
+              ))}
+            </>
           )}
         </Card>
 
@@ -252,35 +366,94 @@ export function OperationsPage() {
       </aside>
 
       <MapCanvas basemap={basemap}>
-        {/* Declarative GIS layers: roads, hospitals, signals, closures,
-            routes, boards, cameras and the three heat surfaces. */}
-        {gis.catalogue.map((layer) =>
-          gis.isActive(layer.name) ? (
+        {/* The road network is drawn imperatively on its own canvas - see the
+            note in TrafficLayer for why it is not a GisLayer. */}
+        {gis.isActive("road_network") && (
+          <TrafficLayer
+            collection={gis.data.road_network ?? null}
+            dimmed={focusedCallsign !== null}
+          />
+        )}
+
+        {/* Declarative GIS layers: hospitals, signals, closures, routes,
+            boards, cameras and the heat surfaces. */}
+        {gis.catalogue.map((layer) => {
+          if (layer.name === "road_network") return null;
+          // In focus mode the platform-wide route and vehicle layers would
+          // re-draw the vehicles this mode exists to hide.
+          if (focusedCallsign && (layer.name === "emergency_routes" || layer.name === "emergency_vehicles")) {
+            return null;
+          }
+          return gis.isActive(layer.name) ? (
             <GisLayer
               key={layer.name}
               layer={layer.name}
               collection={gis.data[layer.name] ?? null}
               heatmap={layer.is_heatmap}
+              highlightId={layer.name === "road_closures" ? highlightedEvent?.id ?? null : null}
             />
-          ) : null,
+          ) : null;
+        })}
+
+        {/* The disruption picked from the sidebar. Drawn even when the
+            closures layer is off - the operator asked for this one. */}
+        {highlightedEvent && (
+          <DisruptionSpotlight
+            event={highlightedEvent}
+            onClear={() => setHighlightedEvent(null)}
+          />
+        )}
+
+        {/* The focused vehicle's own route, in vibrant blue. */}
+        {focusedCallsign && (
+          <>
+            <RouteLine geometry={focusedRoute} colour={ROUTE_BLUE} />
+            <RouteEndpoints
+              geometry={focusedRoute}
+              destinationLabel={focusedTrip?.hospital_name ?? null}
+            />
+          </>
         )}
 
         {/* Vehicles stay socket-driven rather than polled - they move every
             second and carry the priority styling the corridor depends on. */}
-        <VehicleMarkers vehicles={vehicles} onSelect={store.follow} />
+        <VehicleMarkers
+          vehicles={shownVehicles}
+          onSelect={(callsign) => {
+            // From the map we only know the vehicle; let focusedTrip resolve
+            // which of its trips to draw.
+            setSelectedTripId(null);
+            store.follow(callsign);
+          }}
+          focusedCallsign={focusedCallsign}
+          tripsByCallsign={tripsByCallsign}
+        />
 
-        {store.alerts.map((alert) => (
-          <AlertCircle
-            key={alert.uuid}
-            position={[alert.latitude, alert.longitude]}
-            radiusM={alert.radius_m}
-            message={alert.message}
-          />
-        ))}
+        {showAlertZones &&
+          store.alerts.map((alert) => (
+            <AlertCircle
+              key={alert.uuid}
+              position={[alert.latitude, alert.longitude]}
+              radiusM={alert.radius_m}
+              message={alert.message}
+            />
+          ))}
         <FollowVehicle
           position={followed ? [followed.latitude, followed.longitude] : null}
+          enabled={focusedCallsign !== null}
         />
       </MapCanvas>
+
+      {focusedCallsign && (
+        <div className="focus-banner">
+          <span className="focus-dot" />
+          Tracking <b>{focusedCallsign}</b>
+          {focusedTrip?.hospital_name ? ` → ${focusedTrip.hospital_name}` : ""}
+          <button type="button" onClick={clearFocus}>
+            Show all emergency vehicles
+          </button>
+        </div>
+      )}
 
       <LayerControl
         catalogue={gis.catalogue}
@@ -291,21 +464,61 @@ export function OperationsPage() {
         basemapId={basemapId}
         onBasemap={setBasemapId}
         authenticated={authenticated}
+        clientLayers={[
+          {
+            name: "alert_zones",
+            title: "Driver alert zones",
+            description:
+              "Broadcast radius around each warned vehicle. Off by default — with several responses running they overlap into one orange mass.",
+            count: store.alerts.length,
+            active: showAlertZones,
+            onToggle: toggleAlertZones,
+          },
+        ]}
       />
       <MapLegend />
     </div>
   );
 }
 
-function TripCard({ trip, onSelect }: { trip: Trip; onSelect: (callsign: string) => void }) {
+/**
+ * One-second clock, scoped to the card that needs it.
+ *
+ * This used to live on the page, which meant the whole console - map, layers,
+ * every marker - re-rendered once a second purely so an ETA countdown stayed
+ * honest. Keeping the interval here confines that cost to the text it exists
+ * for.
+ */
+function useSecondTick(): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+}
+
+function TripCard({
+  trip,
+  selected = false,
+  dimmed = false,
+  onSelect,
+}: {
+  trip: Trip;
+  selected?: boolean;
+  dimmed?: boolean;
+  onSelect: () => void;
+}) {
+  useSecondTick();
   return (
     <div
-      className={`trip ${levelClass(trip.priority_level)}`}
-      onClick={() => onSelect(trip.vehicle_callsign)}
+      className={`trip clickable ${levelClass(trip.priority_level)}${selected ? " selected" : ""}${
+        dimmed ? " dimmed" : ""
+      }`}
+      onClick={onSelect}
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
-        if (event.key === "Enter") onSelect(trip.vehicle_callsign);
+        if (event.key === "Enter") onSelect();
       }}
     >
       <div className="head">

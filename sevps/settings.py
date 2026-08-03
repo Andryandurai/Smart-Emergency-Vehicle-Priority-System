@@ -30,6 +30,13 @@ def env_int(key: str, default: int) -> int:
         return default
 
 
+def env_float(key: str, default: float) -> float:
+    try:
+        return float(env(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
@@ -307,6 +314,15 @@ SEVPS = {
     "ROUTE_ALGORITHM": env("SEVPS_ROUTE_ALGORITHM", "astar"),  # astar | dijkstra
     "REROUTE_MIN_GAIN_S": env_int("SEVPS_REROUTE_MIN_GAIN_S", 45),
     "REROUTE_MIN_INTERVAL_S": env_int("SEVPS_REROUTE_MIN_INTERVAL_S", 30),
+    # Congestion-triggered replanning. 0.55 is the moderate/heavy boundary in
+    # CongestionLevel.from_ratio (index = 1 - speed ratio, and HEAVY starts at
+    # ratio 0.45), so "heavy congestion" means one thing platform-wide: the
+    # word in the popup, the colour on the map and the reroute trigger all
+    # agree. Two segments rather than one, because a single slow link is often
+    # just a signal queue that clears before the vehicle reaches it.
+    "REROUTE_CONGESTION_THRESHOLD": env_float("SEVPS_REROUTE_CONGESTION_THRESHOLD", 0.55),
+    "REROUTE_CONGESTION_MIN_SEGMENTS": env_int("SEVPS_REROUTE_CONGESTION_MIN_SEGMENTS", 2),
+    "REROUTE_CONGESTED_MIN_GAIN_S": env_int("SEVPS_REROUTE_CONGESTED_MIN_GAIN_S", 10),
     "CONGESTION_MODEL_PATH": env("SEVPS_CONGESTION_MODEL_PATH", ""),
     # Layer 5 - hospital recommendation weights (must be interpretable & tunable)
     "HOSPITAL_WEIGHTS": {

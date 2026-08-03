@@ -25,6 +25,8 @@ from apps.hospitals.models import (
 )
 from apps.hospitals.recommender import recommend_hospital
 from apps.hospitals.rules import resolve_rule, seed_rules
+from apps.hospitals.symptoms import assess
+from apps.hospitals.symptoms import catalogue as symptom_catalogue
 from apps.hospitals.serializers import (
     EmergencyRuleSerializer,
     HospitalAlertSerializer,
@@ -198,8 +200,13 @@ class RecommendHospitalView(APIView):
             radius_km=data.get("radius_km"),
             max_candidates=data.get("max_candidates"),
             exclude_hospital_ids=set(data.get("exclude_hospital_ids") or []),
+            symptoms=data.get("symptoms"),
         )
-        return Response(recommendation.as_dict())
+        payload = recommendation.as_dict()
+        # Echo what the symptoms contributed, so the crew can see why the
+        # shortlist narrowed rather than having to trust that it did.
+        payload["symptom_assessment"] = assess(data.get("symptoms")).as_dict()
+        return Response(payload)
 
 
 class RuleLookupView(APIView):
@@ -209,6 +216,20 @@ class RuleLookupView(APIView):
 
     def get(self, request, category: str):
         return Response(resolve_rule(category).as_dict())
+
+
+class SymptomCatalogueView(APIView):
+    """The symptom picker's contents.
+
+    Public for the same reason the rule catalogue is: it is clinical
+    configuration, not patient data, and a crew on an unauthenticated
+    fallback device still has to be able to record what they can see.
+    """
+
+    permission_classes = [PublicRead]
+
+    def get(self, request):
+        return Response({"symptoms": symptom_catalogue()})
 
 
 class HospitalAlertViewSet(viewsets.ModelViewSet):

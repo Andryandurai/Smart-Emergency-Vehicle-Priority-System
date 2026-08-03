@@ -40,11 +40,28 @@ class Role:
     """Canonical group names. Import these, never hard-code the strings."""
 
     ADMIN = "administrators"
-    TRAFFIC_POLICE = "traffic_police"
     HOSPITAL = "hospital_staff"
     AMBULANCE = "ambulance_drivers"
-    DISPATCHER = "dispatchers"
+    #: Attending clinician. Split out from AMBULANCE because the two seats now
+    #: have genuinely different authority: only a driver may select a vehicle
+    #: and open a shift, and only a paramedic gets the clinical portal. The
+    #: group name is ``paramedic_crew`` rather than the obvious ``paramedics``
+    #: because that string is already a legacy alias of AMBULANCE - reusing it
+    #: would silently resolve every paramedic back to the driver role.
+    PARAMEDIC = "paramedic_crew"
     PUBLIC = "public_users"
+
+    # --- retired ----------------------------------------------------------
+    # Traffic police, dispatcher and the legacy operator alias were removed:
+    # SEVPS is operated by administrators, ambulance crews and hospitals, and
+    # the three retired roles had no holder outside the demo seed.
+    #
+    # The constants are gone rather than deprecated, so any surviving
+    # reference is a NameError at import rather than a silent grant. The
+    # permission classes that used them (IsTrafficPolice, IsDispatcher,
+    # IsOperator) are deliberately kept: their `required_roles` derive from
+    # TRAFFIC_ROLES / DISPATCH_ROLES, which now resolve to administrators
+    # alone. That leaves ~39 view declarations untouched and correct.
 
 
 ROLES: dict[str, RoleSpec] = {
@@ -55,19 +72,6 @@ ROLES: dict[str, RoleSpec] = {
         clinical_access=True,
         traffic_control=True,
         dispatch_control=True,
-    ),
-    Role.TRAFFIC_POLICE: RoleSpec(
-        key=Role.TRAFFIC_POLICE,
-        label="Traffic Police",
-        description=(
-            "Traffic control room. Signal preemption override, corridor release, "
-            "road events, camera sweeps, hotspot analysis."
-        ),
-        # Deliberately NOT clinical: a traffic controller needs to know a
-        # vehicle's priority and position, not the patient's diagnosis.
-        clinical_access=False,
-        traffic_control=True,
-        aliases=("operators",),
     ),
     Role.HOSPITAL: RoleSpec(
         key=Role.HOSPITAL,
@@ -81,23 +85,24 @@ ROLES: dict[str, RoleSpec] = {
     ),
     Role.AMBULANCE: RoleSpec(
         key=Role.AMBULANCE,
-        label="Ambulance Driver / Paramedic",
+        label="Ambulance Driver",
         description=(
-            "Ambulance crew. Telemetry, patient assessment, hospital "
-            "confirmation, trip stage changes."
+            "Ambulance driver. Selects the vehicle, opens the shift, runs the "
+            "readiness inspection, drives the navigation console and reports "
+            "faults or breakdowns."
         ),
         clinical_access=True,
         aliases=("paramedics",),
     ),
-    Role.DISPATCHER: RoleSpec(
-        key=Role.DISPATCHER,
-        label="Emergency Dispatcher",
+    Role.PARAMEDIC: RoleSpec(
+        key=Role.PARAMEDIC,
+        label="Paramedic",
         description=(
-            "Emergency call centre. Opens responses, assigns vehicles, "
-            "reassigns and cancels trips."
+            "Attending clinician. Accepts the driver's shift request, records "
+            "the patient assessment, chooses the receiving hospital and starts "
+            "the transport. No fleet, traffic or configuration access."
         ),
         clinical_access=True,
-        dispatch_control=True,
     ),
     Role.PUBLIC: RoleSpec(
         key=Role.PUBLIC,

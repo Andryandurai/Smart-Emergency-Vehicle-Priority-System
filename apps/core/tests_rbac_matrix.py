@@ -26,8 +26,11 @@ from apps.core.roles import Role
 pytestmark = [pytest.mark.rbac, pytest.mark.django_db]
 
 #: Roles a request can arrive with. `None` is anonymous.
-CALLERS = [None, Role.PUBLIC, Role.TRAFFIC_POLICE, Role.HOSPITAL,
-           Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN, "superuser"]
+#: Every kind of caller the API can see. One entry per role - duplicates give
+#: pytest colliding parametrisation ids (administrators0, administrators1)
+#: and test the same thing repeatedly.
+CALLERS = [None, Role.PUBLIC, Role.ADMIN, Role.HOSPITAL,
+           Role.AMBULANCE, Role.PARAMEDIC, "superuser"]
 
 ALLOWED = {200, 201, 202, 204}
 DENIED = {401, 403}
@@ -117,7 +120,7 @@ def test_operational_reads_are_closed_to_anonymous(as_role, url):
 @pytest.mark.parametrize("url", AUTHENTICATED_GETS)
 @pytest.mark.parametrize(
     "role",
-    [Role.TRAFFIC_POLICE, Role.HOSPITAL, Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN],
+    [Role.ADMIN, Role.HOSPITAL, Role.AMBULANCE, Role.PARAMEDIC],
 )
 def test_operational_reads_are_open_to_every_operational_role(as_role, role, url):
     client = as_role(role)
@@ -133,8 +136,7 @@ ADMIN_ONLY_GETS = [
 
 @pytest.mark.parametrize("url", ADMIN_ONLY_GETS)
 @pytest.mark.parametrize(
-    "role", [None, Role.PUBLIC, Role.TRAFFIC_POLICE, Role.HOSPITAL,
-             Role.AMBULANCE, Role.DISPATCHER],
+    "role", [None, Role.PUBLIC, Role.HOSPITAL, Role.AMBULANCE, Role.PARAMEDIC],
 )
 def test_admin_only_reads_are_closed_to_every_other_role(as_role, role, url):
     assert outcome(as_role(role).get(url).status_code) == "denied"
@@ -159,10 +161,13 @@ def test_public_users_do_not_get_operational_data(as_role):
 # ---------------------------------------------------------------------------
 # Writes. The table is the specification: which role may command what.
 #
-# Traffic police deliberately do NOT appear in the clinical column, and
-# hospital staff do not appear in the traffic column. That is data
-# minimisation, not distrust: a controller runs a green corridor knowing a
-# vehicle's priority and position, and never the patient's diagnosis.
+# Hospital staff deliberately do not appear in the traffic column, and no
+# non-clinical role appears in the clinical one. That is data minimisation,
+# not distrust.
+#
+# Traffic and dispatch authority used to belong to their own roles. Those were
+# retired, and both now sit with the administrator - so `{Role.ADMIN}` in this
+# table means "only an administrator", not "an administrator among others".
 # ---------------------------------------------------------------------------
 WRITE_CASES = [
     # (label, method, url, body, roles that must be allowed)
@@ -170,7 +175,7 @@ WRITE_CASES = [
         "release a green corridor",
         "post", "/api/v1/dispatch/trips/{trip}/corridor/release/",
         {"reason": "manual override"},
-        {Role.TRAFFIC_POLICE, Role.ADMIN},
+        {Role.ADMIN},
     ),
     (
         "declare hospital diversion",
@@ -188,13 +193,13 @@ WRITE_CASES = [
         "cancel an emergency response",
         "post", "/api/v1/dispatch/trips/{trip}/cancel/",
         {"reason": "stood down"},
-        {Role.DISPATCHER, Role.ADMIN},
+        {Role.ADMIN},
     ),
     (
         "push vehicle telemetry",
         "post", "/api/v1/fleet/vehicles/{vehicle}/telemetry/",
         {"latitude": 13.06, "longitude": 80.25, "speed_kmh": 40},
-        {Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN},
+        {Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN},
     ),
 ]
 
@@ -227,8 +232,9 @@ def test_write_authorisation_matrix(
 # ---------------------------------------------------------------------------
 CLINICAL_FIELDS = ("patient_age", "patient_notes", "caller_number")
 
-CLEARED = {Role.HOSPITAL, Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN, "superuser"}
-NOT_CLEARED = {Role.TRAFFIC_POLICE, Role.PUBLIC, None}
+CLEARED = {Role.HOSPITAL, Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN, "superuser"}
+# The administrator is cleared; only the public role and anonymous are not.
+NOT_CLEARED = {Role.PUBLIC, None}
 
 
 @pytest.mark.parametrize("role", sorted(CLEARED, key=str))
@@ -251,14 +257,32 @@ def test_uncleared_roles_never_see_clinical_data(as_role, trip, role):
     assert body.get("clinical_data_redacted") is True
 
 
-def test_clinical_fields_are_absent_from_every_list_endpoint(as_role, trip):
-    """Detail views are the obvious place to check; list views are where a
-    `many=True` serializer without context quietly leaks the whole table."""
-    client = as_role(Role.TRAFFIC_POLICE)
-    body = client.get("/api/v1/dispatch/trips/live/").json()
-    serialised = str(body)
-    assert "Chest pain" not in serialised
-    assert "ST elevation" not in serialised
+def test_an_uncleared_caller_cannot_reach_the_trip_list_at_all(as_role, trip):
+    """The strongest form of the guarantee, and the one that now holds.
+
+    This used to sign in as the traffic police - a role that could read the
+    list but had no clinical clearance - and assert the notes were redacted
+    out of it. That role is retired, and every role that can still reach this
+    endpoint is cleared, so the property to pin is the outer one: an uncleared
+    caller is refused the list entirely.
+    """
+    for role in (None, Role.PUBLIC):
+        response = as_role(role).get("/api/v1/dispatch/trips/live/")
+        assert outcome(response.status_code) == "denied", role
+
+
+def test_a_list_serialised_without_context_still_redacts(trip):
+    """Where a `many=True` serializer would quietly leak the whole table.
+
+    No HTTP, deliberately: the risk is a serializer used somewhere that
+    forgets to pass a request, and that cannot be reached through a view.
+    """
+    from apps.dispatch.models import EmergencyTrip
+    from apps.dispatch.serializers import EmergencyTripSerializer
+
+    body = str(EmergencyTripSerializer(EmergencyTrip.objects.all(), many=True).data)
+    assert "Chest pain" not in body
+    assert "ST elevation" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +313,7 @@ def test_notification_test_send_cannot_target_another_user(as_role, users, db):
     PushSubscription.objects.create(
         user=victim, endpoint="https://push.example.org/victim", p256dh="k", auth="a"
     )
-    response = as_role(Role.TRAFFIC_POLICE).post("/api/v1/notify/test/", {}, format="json")
+    response = as_role(Role.ADMIN).post("/api/v1/notify/test/", {}, format="json")
     # No subscriptions of their own -> 409, and crucially not a delivery to
     # someone else's device.
     assert response.status_code == 409

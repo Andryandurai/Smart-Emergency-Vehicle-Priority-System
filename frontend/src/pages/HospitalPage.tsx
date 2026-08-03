@@ -196,6 +196,19 @@ export function HospitalPage() {
                     <b>{trip.category_display}</b>
                     {trip.patient_age ? ` · age ${trip.patient_age}` : ""}
                   </div>
+                  {/* What the crew observed. This is what lets the receiving
+                      team call the trauma bay and cross-match blood before
+                      the doors open, where a category of "Undetermined" -
+                      which an unsure crew correctly selects - says nothing. */}
+                  {trip.symptom_labels && trip.symptom_labels.length > 0 && (
+                    <div className="symptom-chips">
+                      {trip.symptom_labels.map((label) => (
+                        <span key={label} className="symptom-chip">
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="meta">{trip.stage_display}</div>
                   <div className="meta">
                     <span className="eta">ETA {fmtEta(trip.eta)}</span> ·{" "}

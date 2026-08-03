@@ -211,6 +211,10 @@ class HospitalAlert(TimeStampedModel, UUIDModel):
         "dispatch.EmergencyTrip", on_delete=models.CASCADE, related_name="hospital_alerts"
     )
     emergency_category = models.CharField(max_length=20, choices=EmergencyCategory.choices)
+    #: Copied onto the alert rather than read through the trip, so the record
+    #: says what the hospital was told at the time. The trip's symptoms can
+    #: change as the crew re-triages; the alert must not rewrite history.
+    symptoms = models.JSONField(default=list, blank=True)
     priority_level = models.PositiveSmallIntegerField(choices=PriorityLevel.choices)
     eta = models.DateTimeField(null=True, blank=True)
     distance_remaining_m = models.FloatField(null=True, blank=True)

@@ -5,7 +5,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from apps.core.enums import TripStage, VehicleStatus
+from apps.core.enums import PatientSymptom, TripStage, VehicleStatus
 from apps.core.geo import Point
 from apps.core.permissions import (
     IsAmbulanceCrew,
@@ -116,8 +116,14 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
             return EmergencyVehicle.objects.filter(
                 callsign__iexact=data["vehicle_callsign"]
             ).first()
-        # auto_assign: nearest deployable unit within 25 km.
-        nearest = EmergencyVehicle.objects.deployable().near(incident.lat, incident.lon, 25_000)
+        # auto_assign: nearest *dispatchable* unit within 25 km. Dispatchable,
+        # not merely deployable: a vehicle grounded by a failed brake check is
+        # idle at the station and would otherwise be the nearest thing to the
+        # call, which is precisely the outcome the readiness gate exists to
+        # prevent.
+        nearest = EmergencyVehicle.objects.dispatchable().near(
+            incident.lat, incident.lon, 25_000
+        )
         return nearest[0] if nearest else None
 
     @action(detail=True, methods=["post"])
@@ -137,9 +143,14 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
             if field in data:
                 setattr(trip, field, data[field])
         trip.emergency_category = data["emergency_category"]
+        if "symptoms" in data:
+            # Deduplicated and ordered by the enum, so the same observations
+            # always store and display identically.
+            selected = set(data["symptoms"])
+            trip.symptoms = [s for s, _ in PatientSymptom.choices if s in selected]
         trip.save(
             update_fields=[
-                "emergency_category", "patient_age", "patient_notes",
+                "emergency_category", "symptoms", "patient_age", "patient_notes",
                 "patient_deteriorating", "allow_contraflow", "updated_at",
             ]
         )
@@ -155,6 +166,7 @@ class EmergencyTripViewSet(viewsets.ModelViewSet):
             hospital=hospital,
             emergency_category=data["emergency_category"],
             override_reason=data.get("override_reason", ""),
+            choice_reason=data.get("choice_reason"),
         )
         trip.refresh_from_db()
         return Response(

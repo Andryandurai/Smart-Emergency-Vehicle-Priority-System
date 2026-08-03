@@ -130,7 +130,7 @@ class SocketAuthorisationTests(TransactionTestCase):
             HospitalCapacity.objects.create(hospital=hospital)
 
         await seed()
-        police = await make_user("wsp_police", Role.TRAFFIC_POLICE)
+        police = await make_user("wsp_police", Role.ADMIN)
         communicator, connected, code = await connect(
             "/ws/hospital/WSP2/", await token_for(police)
         )
@@ -186,7 +186,7 @@ class SocketAuthorisationTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_traffic_police_may_open_the_signals_bridge(self):
-        police = await make_user("wsp_cop2", Role.TRAFFIC_POLICE)
+        police = await make_user("wsp_cop2", Role.ADMIN)
         communicator, connected, _ = await connect("/ws/signals/", await token_for(police))
         self.assertTrue(connected)
         await communicator.disconnect()
@@ -198,7 +198,7 @@ class SocketAuthorisationTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_any_authenticated_role_may_open_ops(self):
-        for role in (Role.TRAFFIC_POLICE, Role.HOSPITAL, Role.AMBULANCE, Role.DISPATCHER):
+        for role in (Role.ADMIN, Role.HOSPITAL, Role.AMBULANCE, Role.ADMIN):
             user = await make_user(f"wsp_ops_{role}", role)
             communicator, connected, _ = await connect("/ws/ops/", await token_for(user))
             self.assertTrue(connected, f"{role} should be able to open /ws/ops/")
@@ -224,7 +224,7 @@ class SocketAuthorisationTests(TransactionTestCase):
 # ---------------------------------------------------------------------------
 class SocketTransportTests(TransactionTestCase):
     async def _ops(self):
-        user = await make_user("wsp_tx", Role.DISPATCHER)
+        user = await make_user("wsp_tx", Role.ADMIN)
         communicator, connected, _ = await connect("/ws/ops/", await token_for(user))
         self.assertTrue(connected)
         await communicator.receive_json_from(timeout=5)  # snapshot

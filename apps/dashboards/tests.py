@@ -50,7 +50,7 @@ async def connect(path, user=None):
 class OpsSocketTests(TransactionTestCase):
     async def test_connect_receives_a_snapshot(self):
         """A control room opening mid-incident must not wait for the next event."""
-        user = await make_role_user("ops_snap", Role.DISPATCHER)
+        user = await make_role_user("ops_snap", Role.ADMIN)
         communicator, connected = await connect("/ws/ops/", user)
         self.assertTrue(connected)
 
@@ -62,7 +62,7 @@ class OpsSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_broadcast_reaches_a_subscriber(self):
-        user = await make_role_user("ops_bcast", Role.DISPATCHER)
+        user = await make_role_user("ops_bcast", Role.ADMIN)
         communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)  # snapshot
 
@@ -75,7 +75,7 @@ class OpsSocketTests(TransactionTestCase):
 
     async def test_ping_is_answered(self):
         """Application-level keepalive - idle sockets get dropped by proxies."""
-        user = await make_role_user("ops_ping", Role.DISPATCHER)
+        user = await make_role_user("ops_ping", Role.ADMIN)
         communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)
 
@@ -85,7 +85,7 @@ class OpsSocketTests(TransactionTestCase):
         await communicator.disconnect()
 
     async def test_malformed_payload_is_rejected_not_fatal(self):
-        user = await make_role_user("ops_bad", Role.DISPATCHER)
+        user = await make_role_user("ops_bad", Role.ADMIN)
         communicator, _ = await connect("/ws/ops/", user)
         await communicator.receive_json_from(timeout=5)
 

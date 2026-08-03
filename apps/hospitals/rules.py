@@ -233,6 +233,51 @@ def resolve_rule(category: str) -> ResolvedRule:
     )
 
 
+def resolve_rule_for(category: str, symptoms=None) -> ResolvedRule:
+    """The rule to route by, given a category and whatever the crew observed.
+
+    Symptoms *add to* the category rule, they never replace it - a crew that
+    selects "Trauma" and also ticks "Burns" needs a burn unit as well as a
+    trauma centre, and quietly dropping either requirement sends the patient
+    somewhere that cannot treat half of what is wrong with them.
+
+    The one thing symptoms can do on their own is supply a rule where the
+    category has none to give: ``UNDETERMINED`` carries no required
+    facilities, which is correct (an unsure crew must not narrow the hospital
+    list on a guess) but useless. Observations fill that gap with something
+    defensible.
+    """
+    from apps.hospitals.symptoms import assess
+
+    rule = resolve_rule(category)
+    reading = assess(symptoms)
+    if reading.is_empty:
+        return rule
+
+    display = rule.display_name
+    if category == EC.UNKNOWN:
+        # "Undetermined" on a hospital board is a shrug. Name the findings.
+        display = "Symptom-led: " + ", ".join(reading.as_dict()["labels"])
+
+    guidance = rule.guidance
+    if reading.notes:
+        guidance = "\n".join([guidance, *reading.notes]).strip()
+
+    return ResolvedRule(
+        category=rule.category,
+        display_name=display,
+        required=rule.required | reading.required,
+        preferred=(rule.preferred | reading.preferred) - (rule.required | reading.required),
+        # Most urgent wins. PriorityLevel is an IntegerChoices where 1 is the
+        # most urgent, so this is min(), not max().
+        priority_level=min(rule.priority_level, reading.priority),
+        requires_icu=rule.requires_icu,
+        golden_window_min=rule.golden_window_min,
+        time_critical=rule.time_critical,
+        guidance=guidance,
+    )
+
+
 def seed_rules() -> tuple[int, int]:
     """Load/refresh the seed rule base. Returns ``(created, updated)``."""
     from apps.hospitals.models import EmergencyRule

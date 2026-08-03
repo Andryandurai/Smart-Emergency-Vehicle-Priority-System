@@ -27,6 +27,7 @@ from apps.core.enums import (
     AlertChannel,
     HospitalFacility as HF,
     RoadClass,
+    VehicleOwnership,
     VehicleStatus,
     VehicleType,
 )
@@ -135,16 +136,28 @@ HOSPITALS = [
     },
 ]
 
+# (callsign, type, operator, is_als, ownership, registration)
+# Registrations are fixed rather than random so a demo screenshot, a bug report
+# and a test all name the same vehicle.
 AMBULANCES = [
-    ("AMB-101", VehicleType.AMBULANCE, "108 Emergency Services", True),
-    ("AMB-102", VehicleType.AMBULANCE, "108 Emergency Services", True),
-    ("AMB-103", VehicleType.AMBULANCE, "108 Emergency Services", False),
-    ("AMB-104", VehicleType.AMBULANCE, "Apollo Hospitals", True),
-    ("AMB-105", VehicleType.AMBULANCE, "Kauvery Hospital", False),
-    ("AMB-106", VehicleType.AMBULANCE, "GVK EMRI", True),
-    ("FIRE-21", VehicleType.FIRE_ENGINE, "TN Fire & Rescue Services", False),
-    ("FIRE-22", VehicleType.FIRE_ENGINE, "TN Fire & Rescue Services", False),
-    ("POL-07", VehicleType.POLICE, "Greater Chennai Traffic Police", False),
+    ("AMB-101", VehicleType.AMBULANCE, "108 Emergency Services", True,
+     VehicleOwnership.GOVERNMENT, "TN 01 AE 4501"),
+    ("AMB-102", VehicleType.AMBULANCE, "108 Emergency Services", True,
+     VehicleOwnership.GOVERNMENT, "TN 01 AE 4502"),
+    ("AMB-103", VehicleType.AMBULANCE, "108 Emergency Services", False,
+     VehicleOwnership.GOVERNMENT, "TN 01 AE 4503"),
+    ("AMB-104", VehicleType.AMBULANCE, "Apollo Hospitals", True,
+     VehicleOwnership.PRIVATE_HOSPITAL, "TN 07 BK 8811"),
+    ("AMB-105", VehicleType.AMBULANCE, "Kauvery Hospital", False,
+     VehicleOwnership.PRIVATE_HOSPITAL, "TN 07 BK 8812"),
+    ("AMB-106", VehicleType.AMBULANCE, "GVK EMRI", True,
+     VehicleOwnership.PRIVATE_SERVICE, "TN 22 CM 3390"),
+    ("AMB-107", VehicleType.AMBULANCE, "108 Emergency Services", False,
+     VehicleOwnership.GOVERNMENT, "TN 01 AE 4504"),
+    ("AMB-108", VehicleType.AMBULANCE, "Rela Institute", True,
+     VehicleOwnership.PRIVATE_HOSPITAL, "TN 07 BK 8813"),
+    ("AMB-109", VehicleType.AMBULANCE, "Red Cross Society", False,
+     VehicleOwnership.NGO, "TN 09 RC 1201"),
 ]
 
 
@@ -454,12 +467,13 @@ class Command(BaseCommand):
             stations.append(station)
 
         vehicles = []
-        for callsign, vtype, operator, is_als in AMBULANCES:
+        for callsign, vtype, operator, is_als, ownership, registration in AMBULANCES:
             node = node_list[rng.randrange(len(node_list))]
             vehicle, _ = EmergencyVehicle.objects.update_or_create(
                 callsign=callsign,
                 defaults={
                     "vehicle_type": vtype,
+                    "ownership": ownership,
                     "operator": operator,
                     "home_station": rng.choice(stations),
                     "status": VehicleStatus.AVAILABLE,
@@ -470,7 +484,7 @@ class Command(BaseCommand):
                     "last_seen_at": timezone.now(),
                     "is_als": is_als,
                     "crew_size": rng.choice([2, 2, 3]),
-                    "registration": f"TN01{rng.choice('ABCDEFG')}{rng.randint(1000, 9999)}",
+                    "registration": registration,
                     "equipment": ["defibrillator", "oxygen", "spine board"]
                     + (["ventilator", "infusion pump"] if is_als else []),
                 },

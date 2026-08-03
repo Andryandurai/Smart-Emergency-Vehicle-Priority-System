@@ -8,35 +8,56 @@
 import { ApiError, api, getAccessToken } from "./client";
 import type {
   AnalyticsSummary,
+  Breakdown,
   CategoryDistribution,
   CorridorOutcomes,
+  CrewPerson,
+  CrewShift,
   CurrentUser,
   DailyTrends,
   DemandProfile,
+  DemoAccount,
   DisplayBoardLive,
   DriverAlert,
   EmergencyRuleSummary,
+  EquipmentAnswer,
+  EquipmentCheckPayload,
+  EquipmentItemSpec,
+  FailureReason,
+  FleetBoard,
+  FleetRow,
   Hospital,
   HospitalCapacity,
   ExportDataset,
   HospitalLoad,
+  HospitalChoiceReason,
   Hotspot,
   Inbox,
   LiveVehicles,
+  MaintenanceReport,
+  MyShift,
   NotificationPreferences,
   Paginated,
   Preemption,
   PushSubscriptionSummary,
   PushTestResult,
+  ReadinessOutcome,
   Recommendation,
   ResponseDistribution,
   RoadEvent,
   RoleDescriptor,
+  RoutePreview,
   SegmentCollection,
+  SelectableVehicle,
   ServiceInfo,
+  StaffProfile,
+  SymptomCode,
+  SymptomSpec,
   TokenPair,
+  TransferOffer,
   TrendSummary,
   Trip,
+  VehicleReadiness,
 } from "./types";
 import { unwrap } from "./types";
 
@@ -49,6 +70,48 @@ export const auth = {
   logout: () => api.post<{ detail: string }>("/api/v1/auth/jwt/logout/", {}),
   me: (signal?: AbortSignal) => api.get<CurrentUser>("/api/v1/auth/me/", signal),
   roles: () => api.get<{ roles: RoleDescriptor[] }>("/api/v1/auth/roles/"),
+
+  /** Seeded credentials for the login screen. Empty outside DEBUG. */
+  demoAccounts: (signal?: AbortSignal) =>
+    api.get<{ accounts: DemoAccount[]; available: boolean }>(
+      "/api/v1/auth/demo-accounts/",
+      signal,
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Staff profile — self-service only, there is no user id in any of these URLs
+// ---------------------------------------------------------------------------
+export const profile = {
+  mine: (signal?: AbortSignal) => api.get<StaffProfile>("/api/v1/auth/profile/", signal),
+
+  save: (body: Partial<Pick<StaffProfile, "phone" | "blood_group" | "emergency_contact">>) =>
+    api.patch<StaffProfile>("/api/v1/auth/profile/", body),
+
+  /**
+   * Upload a profile picture.
+   *
+   * Sent as multipart with `fetch` rather than through `api.post`, which
+   * JSON-encodes its body — a File would arrive as "[object File]".
+   */
+  uploadAvatar: async (file: File): Promise<StaffProfile> => {
+    const form = new FormData();
+    form.append("avatar", file);
+    const token = getAccessToken();
+    const response = await fetch("/api/v1/auth/profile/avatar/", {
+      method: "POST",
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new ApiError(detail.detail ?? `Upload failed (${response.status})`, response.status);
+    }
+    return response.json() as Promise<StaffProfile>;
+  },
+
+  removeAvatar: () => api.delete<StaffProfile>("/api/v1/auth/profile/avatar/"),
 };
 
 // ---------------------------------------------------------------------------
@@ -68,6 +131,164 @@ export const fleet = {
     vehicleId: number,
     fix: { latitude: number; longitude: number; speed_kmh?: number; heading_deg?: number },
   ) => api.post<unknown>(`/api/v1/fleet/vehicles/${vehicleId}/telemetry/`, fix),
+};
+
+// ---------------------------------------------------------------------------
+// Crew takeover and the start-of-shift vehicle check
+// ---------------------------------------------------------------------------
+export const shifts = {
+  /** My open shift plus any takeover waiting on my acceptance. */
+  mine: (signal?: AbortSignal) => api.get<MyShift>("/api/v1/fleet/shifts/mine/", signal),
+
+  /** Who a driver may name as their paramedic - ambulance role only. */
+  crew: (signal?: AbortSignal) =>
+    api.get<{ crew: CrewPerson[] }>("/api/v1/fleet/shifts/crew/", signal),
+
+  equipmentCatalogue: (signal?: AbortSignal) =>
+    api.get<{ items: EquipmentItemSpec[] }>(
+      "/api/v1/fleet/shifts/equipment-catalogue/",
+      signal,
+    ),
+
+  /**
+   * Step 1 — the driver takes the vehicle. No paramedic named yet.
+   *
+   * The inspection happens against this draft shift; only once it passes does
+   * the driver call a colleague to the ambulance.
+   */
+  claim: (vehicleCallsign: string) =>
+    api.post<CrewShift>("/api/v1/fleet/shifts/claim/", {
+      vehicle_callsign: vehicleCallsign,
+    }),
+
+  /** Step 3 — having inspected it, ask a paramedic to crew it. */
+  requestParamedic: (shiftId: number, paramedicUsername: string) =>
+    api.post<CrewShift>(`/api/v1/fleet/shifts/${shiftId}/request-paramedic/`, {
+      paramedic_username: paramedicUsername,
+    }),
+
+  /** Claim and request in one call. Superseded by claim + requestParamedic. */
+  open: (vehicleCallsign: string, paramedicUsername: string) =>
+    api.post<CrewShift>("/api/v1/fleet/shifts/open/", {
+      vehicle_callsign: vehicleCallsign,
+      paramedic_username: paramedicUsername,
+    }),
+
+  accept: (shiftId: number) => api.post<CrewShift>(`/api/v1/fleet/shifts/${shiftId}/accept/`, {}),
+
+  decline: (shiftId: number, reason: string) =>
+    api.post<CrewShift>(`/api/v1/fleet/shifts/${shiftId}/decline/`, { reason }),
+
+  end: (shiftId: number) => api.post<CrewShift>(`/api/v1/fleet/shifts/${shiftId}/end/`, {}),
+
+  /** Merges into whatever is already recorded - partial progress is kept. */
+  saveChecklist: (
+    shiftId: number,
+    items: Record<string, EquipmentAnswer>,
+    notes?: string,
+  ) =>
+    api.post<EquipmentCheckPayload & ReadinessOutcome>(
+      `/api/v1/fleet/shifts/${shiftId}/checklist/`,
+      { items, ...(notes === undefined ? {} : { notes }) },
+    ),
+
+  /** Emergency skip: go now, complete the check later. Not a waiver. */
+  skipChecklist: (shiftId: number, reason: string) =>
+    api.post<EquipmentCheckPayload & ReadinessOutcome>(
+      `/api/v1/fleet/shifts/${shiftId}/checklist/skip/`,
+      { reason },
+    ),
+
+  /** Ambulances this driver may take over: available, uncrewed, not grounded. */
+  selectableVehicles: (signal?: AbortSignal) =>
+    api.get<{ vehicles: SelectableVehicle[] }>(
+      "/api/v1/fleet/shifts/selectable-vehicles/",
+      signal,
+    ),
+
+  /**
+   * Open a response for this crew's own ambulance.
+   *
+   * Returns the existing trip if there already is one, so the caller can use
+   * it unconditionally rather than having to check first.
+   */
+  newEmergency: (shiftId: number, incidentAddress = "") =>
+    api.post<Trip>(`/api/v1/fleet/shifts/${shiftId}/new-emergency/`, {
+      incident_address: incidentAddress,
+    }),
+};
+
+// ---------------------------------------------------------------------------
+// Driver module: fleet board, maintenance, breakdown transfer
+// ---------------------------------------------------------------------------
+export const driverOps = {
+  /** Every ambulance with crew, readiness, inspection and current job. */
+  board: (signal?: AbortSignal) => api.get<FleetBoard>("/api/v1/fleet/board/", signal),
+
+  /** Administrator override — attributed and broadcast, never silent. */
+  overrideReadiness: (callsign: string, readiness: VehicleReadiness, note = "") =>
+    api.post<FleetRow>(`/api/v1/fleet/vehicles/${callsign}/readiness/`, {
+      readiness,
+      note,
+    }),
+
+  maintenance: (openOnly = true, signal?: AbortSignal) =>
+    api.get<{ reports: MaintenanceReport[] }>(
+      `/api/v1/fleet/maintenance/${openOnly ? "?open=1" : ""}`,
+      signal,
+    ),
+
+  /** A driver raising a fault outside the inspection flow. */
+  reportFault: (vehicleCallsign: string, reasons: FailureReason[], remarks = "") =>
+    api.post<MaintenanceReport>("/api/v1/fleet/maintenance/report/", {
+      vehicle_callsign: vehicleCallsign,
+      reasons,
+      remarks,
+    }),
+
+  acknowledgeFault: (id: number) =>
+    api.post<MaintenanceReport>(`/api/v1/fleet/maintenance/${id}/acknowledge/`, {}),
+
+  resolveFault: (id: number, notes = "") =>
+    api.post<MaintenanceReport>(`/api/v1/fleet/maintenance/${id}/resolve/`, { notes }),
+
+  /**
+   * The Emergency Breakdown button.
+   *
+   * One press notifies admin, dispatch, the receiving hospital and the
+   * nearest crews — a crew with a deteriorating patient and a dead engine
+   * cannot be asked to also contact four parties.
+   */
+  declareBreakdown: (
+    vehicleCallsign: string,
+    reasons: FailureReason[],
+    remarks = "",
+    position?: [number, number],
+  ) =>
+    api.post<Breakdown>("/api/v1/fleet/breakdowns/declare/", {
+      vehicle_callsign: vehicleCallsign,
+      reasons,
+      remarks,
+      ...(position ? { latitude: position[0], longitude: position[1] } : {}),
+    }),
+
+  openBreakdowns: (signal?: AbortSignal) =>
+    api.get<{ breakdowns: Breakdown[] }>("/api/v1/fleet/breakdowns/?open=1", signal),
+
+  /** Transfer requests waiting on the vehicles this user crews. */
+  myOffers: (signal?: AbortSignal) =>
+    api.get<{ offers: TransferOffer[] }>("/api/v1/fleet/breakdowns/offers/", signal),
+
+  acceptTransfer: (breakdownId: number, vehicleCallsign: string) =>
+    api.post<Breakdown>(`/api/v1/fleet/breakdowns/${breakdownId}/accept/`, {
+      vehicle_callsign: vehicleCallsign,
+    }),
+
+  rejectTransfer: (breakdownId: number, vehicleCallsign: string, reason = "") =>
+    api.post<TransferOffer>(`/api/v1/fleet/breakdowns/${breakdownId}/reject/`, {
+      vehicle_callsign: vehicleCallsign,
+      reason,
+    }),
 };
 
 // ---------------------------------------------------------------------------
@@ -99,11 +320,15 @@ export const dispatch = {
     tripId: number,
     body: {
       emergency_category: string;
+      symptoms?: SymptomCode[];
       patient_age?: number;
       patient_notes?: string;
       patient_deteriorating?: boolean;
       hospital_id?: number;
       override_reason?: string;
+      /** Distinguishes a patient exercising their right to choose from the
+       *  crew disagreeing with the engine. Review must not conflate them. */
+      choice_reason?: HospitalChoiceReason;
     },
   ) =>
     api.post<{ trip: Trip; recommendation: Recommendation | null; corridor: Preemption[] }>(
@@ -154,17 +379,58 @@ export const hospitals = {
       reason,
     }),
 
-  recommend: (latitude: number, longitude: number, emergencyCategory: string) =>
+  /**
+   * Rank hospitals for a patient at this location.
+   *
+   * `symptoms` tighten the category's rule rather than replacing it, and are
+   * the only clinical input when the category is undetermined.
+   */
+  recommend: (
+    latitude: number,
+    longitude: number,
+    emergencyCategory: string,
+    symptoms: SymptomCode[] = [],
+  ) =>
     api.post<Recommendation>("/api/v1/hospitals/recommend/", {
       latitude,
       longitude,
       emergency_category: emergencyCategory,
+      symptoms,
     }),
 
   ruleCatalogue: () => api.get<EmergencyRuleSummary[]>("/api/v1/hospitals/rules/catalogue/"),
 
+  symptomCatalogue: (signal?: AbortSignal) =>
+    api.get<{ symptoms: SymptomSpec[] }>("/api/v1/hospitals/symptoms/", signal),
+
   acknowledgeAlert: (alertId: number, body: { acknowledged_by?: string; preparation_notes?: string }) =>
     api.post<unknown>(`/api/v1/hospitals/alerts/${alertId}/acknowledge/`, body),
+};
+
+// ---------------------------------------------------------------------------
+// AI Traffic Intelligence Engine (Layer 2)
+// ---------------------------------------------------------------------------
+export const brain = {
+  /**
+   * Optimised route between two points, in current traffic.
+   *
+   * Used by the paramedic screen to preview the road to a candidate hospital
+   * before the crew commits to it - the trip's own route is not planned until
+   * the assessment is confirmed, so without this the map has nothing to draw.
+   */
+  route: (
+    origin: [number, number],
+    destination: [number, number],
+    priorityLevel = 1,
+  ) =>
+    api.post<RoutePreview>("/api/v1/brain/route/", {
+      origin_lat: origin[0],
+      origin_lon: origin[1],
+      dest_lat: destination[0],
+      dest_lon: destination[1],
+      priority_level: priorityLevel,
+      include_geometry: true,
+    }),
 };
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,16 @@ export function RequireAuth({ roles }: RequireAuthProps) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
+  // A paramedic's portal is the whole of their application. Sending them to
+  // it rather than merely hiding operations items means they can never land
+  // on a control-room screen through a bookmark, a stale tab or a link in a
+  // notification - all of which would otherwise show them a city map they
+  // have no use for and mostly no permission to read.
+  const paramedicOnly = hasRole("paramedic_crew") && !hasRole("administrators");
+  if (paramedicOnly && !location.pathname.startsWith("/p")) {
+    return <Navigate to="/p" replace />;
+  }
+
   if (roles?.length && !hasRole(...roles)) {
     return (
       <div className="page scroll">

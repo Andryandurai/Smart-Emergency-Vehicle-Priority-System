@@ -167,10 +167,36 @@ class IsDispatcher(BaseRolePermission):
 
 
 class IsAmbulanceCrew(BaseRolePermission):
-    """Ambulance crew - telemetry, assessment, stage changes."""
+    """Either seat on an ambulance - telemetry, assessment, stage changes.
 
-    required_roles = (Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN)
+    Widened to include PARAMEDIC when that role was split out of AMBULANCE, so
+    every action a crew shared before the split is still available to both.
+    Actions that genuinely belong to one seat use :class:`IsDriver` or
+    :class:`IsParamedic` instead.
+    """
+
+    required_roles = (Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN)
     message = "Ambulance crew privileges are required."
+
+
+class IsDriver(BaseRolePermission):
+    """Driver-only actions.
+
+    Selecting the ambulance and opening the shift belong to the driver alone:
+    they are the person standing at the vehicle who can see whether it is
+    there and fit to take. A paramedic claiming a vehicle from elsewhere is
+    how a shift gets opened on an ambulance nobody is sitting in.
+    """
+
+    required_roles = (Role.AMBULANCE, Role.ADMIN)
+    message = "Only the ambulance driver can do this."
+
+
+class IsParamedic(BaseRolePermission):
+    """Clinical actions that belong to the attending paramedic."""
+
+    required_roles = (Role.PARAMEDIC, Role.AMBULANCE, Role.ADMIN)
+    message = "Paramedic privileges are required."
 
 
 class IsOperator(IsTrafficPolice):
@@ -216,13 +242,15 @@ class IsCrewForVehicle(BaseRolePermission):
     and any crew member may report.
     """
 
-    required_roles = (Role.AMBULANCE, Role.DISPATCHER, Role.ADMIN)
+    required_roles = (Role.AMBULANCE, Role.PARAMEDIC, Role.ADMIN)
     message = "You are not assigned to this vehicle."
 
     def has_object_permission(self, request, view, obj) -> bool:
         if request.method in permissions.SAFE_METHODS:
             return True
-        if has_role(request.user, Role.DISPATCHER, Role.ADMIN):
+        # Dispatch authority sat with its own role before that was retired;
+        # it belongs to the administrator now.
+        if has_role(request.user, Role.ADMIN):
             return True
         assigned = getattr(obj, "assigned_to_id", None)
         return assigned is None or assigned == request.user.id

@@ -16,6 +16,9 @@ export type Role =
   | "traffic_police"
   | "hospital_staff"
   | "ambulance_drivers"
+  /** Attending clinician. Split out from ambulance_drivers - the group name
+   *  avoids "paramedics", which is a legacy alias of the driver role. */
+  | "paramedic_crew"
   | "dispatchers"
   | "public_users";
 
@@ -62,14 +65,31 @@ export type VehicleStatus =
   | "offline" | "available" | "dispatched" | "on_scene"
   | "transporting" | "at_hospital" | "returning" | "out_of_service";
 
-export type VehicleType = "ambulance" | "fire_engine" | "police" | "disaster";
+/** Fire and police were retired - see the VehicleType docstring in enums.py. */
+export type VehicleType = "ambulance" | "disaster";
+
+/** Operating sector. See VehicleOwnership in apps/core/enums.py. */
+export type VehicleOwnership =
+  | "government" | "private_hospital" | "private_service" | "ngo";
 
 export interface VehiclePayload {
   id: number;
   uuid: string;
   callsign: string;
+  /** Road registration plate. Blank on vehicles imported without one. */
+  registration?: string;
   vehicle_type: VehicleType;
+  vehicle_type_display?: string;
+  ownership?: VehicleOwnership;
+  ownership_display?: string;
+  /** Fitness for dispatch — see VehicleReadiness. */
+  readiness?: VehicleReadiness;
+  readiness_display?: string;
+  /** Operating agency, e.g. "108 Emergency Services". */
+  operator?: string;
+  is_als?: boolean;
   status: VehicleStatus;
+  status_display?: string;
   latitude: number;
   longitude: number;
   heading_deg: number;
@@ -108,6 +128,24 @@ export interface RoutePlanSummary {
   predicted_eta: string | null;
 }
 
+/**
+ * An ad-hoc route from /api/v1/brain/route/.
+ *
+ * Distinct from `RoutePlanSummary`, which is a route the platform has
+ * committed a trip to. This one is a preview: it has no id and nothing is
+ * dispatched on the strength of it.
+ */
+export interface RoutePreview {
+  algorithm: string;
+  /** `[[lat, lon], ...]` - Leaflet's ordering, not GeoJSON's. */
+  geometry: [number, number][];
+  total_distance_m: number;
+  total_duration_s: number;
+  total_duration_min: number;
+  eta: string | null;
+  signalised_nodes: { intersection_id: number; eta_offset_s: number }[];
+}
+
 export interface Trip {
   id: number;
   uuid: string;
@@ -132,6 +170,12 @@ export interface Trip {
   eta: string | null;
   distance_remaining_m: number | null;
   active_route: RoutePlanSummary | null;
+  /** Observed symptoms. Clinical data, so redacted like patient_notes. */
+  symptoms: SymptomCode[] | null;
+  symptom_labels: string[] | null;
+  hospital_choice_reason: HospitalChoiceReason;
+  choice_reason_display: string;
+  hospital_choice_note: string;
   /** Null when the caller's role lacks clinical clearance - see below. */
   patient_age: number | null;
   patient_notes: string | null;
@@ -240,6 +284,30 @@ export interface HospitalCandidate {
   is_on_diversion: boolean;
 }
 
+/** What the crew observed. See apps/core/enums.py PatientSymptom. */
+export type SymptomCode =
+  | "unconscious" | "bleeding" | "breathing_difficulty" | "seizure" | "vomiting"
+  | "fracture" | "burns" | "paralysis" | "chest_pain" | "fever";
+
+export interface SymptomSpec {
+  code: SymptomCode;
+  label: string;
+  priority_level: PriorityLevel;
+  /** Facilities this observation alone makes mandatory. */
+  required_facilities: string[];
+  note: string;
+}
+
+/** What a set of observations implies, echoed back by /recommend/. */
+export interface SymptomAssessment {
+  symptoms: SymptomCode[];
+  labels: string[];
+  required_facilities: string[];
+  preferred_facilities: string[];
+  priority_level: PriorityLevel;
+  notes: string[];
+}
+
 export interface Recommendation {
   rule: RecommendationRule;
   recommended: HospitalCandidate | null;
@@ -248,6 +316,243 @@ export interface Recommendation {
   eligible_count: number;
   relaxed: boolean;
   relaxation_note: string;
+  symptom_assessment?: SymptomAssessment;
+}
+
+/** Why a hospital was chosen. See HospitalChoiceReason in enums.py. */
+export type HospitalChoiceReason =
+  | "recommended" | "patient_request" | "family_request"
+  | "clinical_judgement" | "capacity" | "continuity";
+
+// ---------------------------------------------------------------------------
+// Crew shift & the start-of-shift vehicle check
+// ---------------------------------------------------------------------------
+/** `draft` = vehicle claimed, inspection running, no paramedic asked yet. */
+export type ShiftStatus = "draft" | "pending" | "active" | "declined" | "ended";
+
+export interface CrewPerson {
+  id: number;
+  username: string;
+  name: string;
+}
+
+export interface EquipmentItemSpec {
+  code: string;
+  label: string;
+  group: string;
+  /** Absence makes the vehicle unfit for a Level 1 response. */
+  critical: boolean;
+}
+
+export interface EquipmentAnswer {
+  present: boolean;
+  note?: string;
+}
+
+export interface EquipmentCheckPayload {
+  id: number;
+  shift_id: number;
+  items: Record<string, EquipmentAnswer>;
+  answered: number;
+  total: number;
+  is_complete: boolean;
+  /** Still owed - either skipped, or started and not finished. */
+  is_outstanding: boolean;
+  missing: string[];
+  missing_critical: string[];
+  /** Derived from the answers, never asserted — see EquipmentCheck.derived_readiness. */
+  readiness: VehicleReadiness;
+  /** Maintenance triage categories implied by whatever failed. */
+  failed_reasons: FailureReason[];
+  skipped: boolean;
+  skip_reason: string;
+  skipped_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  notes: string;
+}
+
+export interface CrewShift {
+  id: number;
+  uuid: string;
+  vehicle: number;
+  vehicle_callsign: string;
+  vehicle_registration: string;
+  driver: number;
+  driver_detail: CrewPerson | null;
+  paramedic: number;
+  paramedic_detail: CrewPerson | null;
+  status: ShiftStatus;
+  status_display: string;
+  requested_at: string;
+  accepted_at: string | null;
+  ended_at: string | null;
+  decline_reason: string;
+  equipment_check: EquipmentCheckPayload | null;
+}
+
+export interface MyShift {
+  shift: CrewShift | null;
+  awaiting_my_acceptance: CrewShift[];
+  role_hint: "driver" | "paramedic";
+}
+
+// ---------------------------------------------------------------------------
+// Driver module: readiness, maintenance, breakdown transfer, fleet board
+// ---------------------------------------------------------------------------
+/** Fitness for dispatch. Distinct from VehicleStatus, which is what it's doing. */
+export type VehicleReadiness =
+  | "unchecked" | "ready" | "temporarily_ready" | "not_ready" | "maintenance";
+
+export type FailureReason =
+  | "engine" | "battery" | "tyres" | "brakes" | "gps" | "siren"
+  | "emergency_lights" | "oxygen" | "medical_equipment" | "other";
+
+export type MaintenanceState = "open" | "acknowledged" | "in_progress" | "resolved";
+export type BreakdownState =
+  | "open" | "transfer_accepted" | "transfer_complete" | "resolved" | "cancelled";
+export type TransferOfferState = "offered" | "accepted" | "rejected" | "withdrawn";
+
+/** The extra fields a checklist save returns beyond the check itself. */
+export interface ReadinessOutcome {
+  vehicle_readiness: VehicleReadiness;
+  vehicle_readiness_display: string;
+  /** False when a failed critical item has grounded the vehicle. */
+  may_dispatch: boolean;
+  maintenance_report: MaintenanceReport | null;
+}
+
+export interface MaintenanceReport {
+  id: number;
+  uuid: string;
+  vehicle: string;
+  registration: string;
+  reasons: FailureReason[];
+  failed_items: string[];
+  remarks: string;
+  state: MaintenanceState;
+  state_display: string;
+  from_inspection: boolean;
+  reported_by: string | null;
+  reported_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  is_open: boolean;
+}
+
+export interface Breakdown {
+  id: number;
+  uuid: string;
+  state: BreakdownState;
+  state_display: string;
+  vehicle: string;
+  registration: string;
+  latitude: number;
+  longitude: number;
+  reasons: FailureReason[];
+  remarks: string;
+  reported_at: string;
+  trip_id: number;
+  reference: string;
+  emergency_category: string;
+  emergency_category_display: string;
+  priority_level: PriorityLevel;
+  destination_hospital: string | null;
+  destination_latitude: number | null;
+  destination_longitude: number | null;
+  replacement: string | null;
+  accepted_at: string | null;
+  transferred_at: string | null;
+  offers?: TransferOffer[];
+}
+
+export interface TransferOffer {
+  id: number;
+  breakdown_id: number;
+  vehicle: string;
+  distance_m: number;
+  state: TransferOfferState;
+  state_display: string;
+  responded_at: string | null;
+  reject_reason: string;
+  /** Present on /breakdowns/offers/ so a crew can decide without a second call. */
+  breakdown?: Breakdown;
+}
+
+/** One row of the admin fleet board. */
+export interface FleetRow extends VehiclePayload {
+  readiness: VehicleReadiness;
+  readiness_display: string;
+  shift_status: string;
+  shift_status_display: string;
+  driver_name: string | null;
+  paramedic_name: string | null;
+  on_duty_since: string | null;
+  inspection_status: string;
+  current_trip_reference: string | null;
+  current_emergency: string | null;
+  current_priority_level: PriorityLevel | null;
+  current_destination: string | null;
+  current_eta: string | null;
+  updated_at: string;
+}
+
+export interface FleetBoard {
+  generated_at: string;
+  count: number;
+  vehicles: FleetRow[];
+  summary: {
+    total: number;
+    ready: number;
+    temporarily_ready: number;
+    not_ready: number;
+    maintenance: number;
+    on_duty: number;
+    on_call: number;
+    inspection_pending: number;
+  };
+}
+
+/** An ambulance a driver may take over right now. */
+export interface SelectableVehicle extends VehiclePayload {
+  home_station: string | null;
+  last_inspected_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Staff identity
+// ---------------------------------------------------------------------------
+export interface StaffProfile {
+  username: string;
+  name: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  staff_id: string;
+  phone: string;
+  qualification: string;
+  base_station: string;
+  blood_group: string;
+  emergency_contact: string;
+  avatar_url: string | null;
+  roles?: string[];
+  role_labels?: string[];
+  is_paramedic?: boolean;
+  is_driver?: boolean;
+}
+
+/** Seeded sign-in credentials, shown on the login screen in DEBUG only. */
+export interface DemoAccount {
+  username: string;
+  password: string;
+  name: string;
+  roles: string[];
+  role_labels: string[];
+  is_paramedic: boolean;
+  is_driver: boolean;
+  staff_id: string;
+  qualification: string;
+  base_station: string;
 }
 
 // ---------------------------------------------------------------------------

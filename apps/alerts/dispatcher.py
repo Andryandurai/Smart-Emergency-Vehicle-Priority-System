@@ -38,8 +38,6 @@ def build_message(seconds_away: float, priority_level: int, vehicle_type: str) -
     """Compose the on-screen text.  Returns ``(message, instruction)``."""
     label = {
         "ambulance": "Ambulance",
-        "fire_engine": "Fire Engine",
-        "police": "Police Vehicle",
         "disaster": "Emergency Unit",
     }.get(vehicle_type, "Emergency Vehicle")
 

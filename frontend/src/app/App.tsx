@@ -4,7 +4,9 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/app/AppShell";
 import { RequireAuth } from "@/app/RequireAuth";
 import { BoardsPage } from "@/pages/BoardsPage";
+import { DriverConsolePage } from "@/pages/DriverConsolePage";
 import { DriverPage } from "@/pages/DriverPage";
+import { FleetBoardPage } from "@/pages/FleetBoardPage";
 import { HospitalListPage } from "@/pages/HospitalListPage";
 import { HospitalPage } from "@/pages/HospitalPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -13,6 +15,12 @@ import { OperationsPage } from "@/pages/OperationsPage";
 import { ParamedicPage } from "@/pages/ParamedicPage";
 import { ParamedicSelectPage } from "@/pages/ParamedicSelectPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { HospitalsPage as ParamedicHospitalsPage } from "@/paramedic/HospitalsPage";
+import { NavigationPage as ParamedicNavigationPage } from "@/paramedic/NavigationPage";
+import { NewEmergencyPage } from "@/paramedic/NewEmergencyPage";
+import { ParamedicShell } from "@/paramedic/ParamedicShell";
+import { ProfilePage as ParamedicProfilePage } from "@/paramedic/ProfilePage";
+import { ShiftPage } from "@/paramedic/ShiftPage";
 import { useAuthStore } from "@/stores/authStore";
 
 /**
@@ -48,6 +56,19 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
+        {/* The paramedic portal is a separate application shell, not the
+            operations console with items hidden. It has its own layout, its
+            own navigation and no city map. See ParamedicShell. */}
+        <Route element={<RequireAuth />}>
+          <Route path="/p" element={<ParamedicShell />}>
+            <Route index element={<ShiftPage />} />
+            <Route path="emergency" element={<NewEmergencyPage />} />
+            <Route path="navigate" element={<ParamedicNavigationPage />} />
+            <Route path="hospitals" element={<ParamedicHospitalsPage />} />
+            <Route path="profile" element={<ParamedicProfilePage />} />
+          </Route>
+        </Route>
+
         <Route element={<AppShell />}>
           {/* Public-facing screens: a road user and a roadside sign have no
               credentials, and Layer 4 depends on them working anyway. */}
@@ -60,6 +81,11 @@ export function App() {
             <Route path="/hospital/:code" element={<HospitalPage />} />
             <Route path="/paramedic" element={<ParamedicSelectPage />} />
             <Route path="/paramedic/:callsign" element={<ParamedicPage />} />
+            {/* The ambulance driver's console. Distinct from /driver, which
+                is the public road-user alert receiver - same word, opposite
+                side of the windscreen. */}
+            <Route path="/drive" element={<DriverConsolePage />} />
+            <Route path="/fleet" element={<FleetBoardPage />} />
             <Route
               path="/analytics"
               element={

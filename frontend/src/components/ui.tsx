@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { PriorityLevel } from "@/api/types";
+import type { PriorityLevel, VehicleOwnership, VehiclePayload } from "@/api/types";
 
 export const LEVEL_CLASS: Record<number, string> = { 1: "l1", 2: "l2", 3: "l3", 4: "l4" };
 export const LEVEL_LABEL: Record<number, string> = {
@@ -47,13 +47,15 @@ export function fmtDuration(seconds: number | null | undefined): string {
     : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-export function congestionColour(index: number): string {
-  if (index >= 0.8) return "#e74c3c";
-  if (index >= 0.55) return "#e67e22";
-  if (index >= 0.35) return "#f1c40f";
-  if (index >= 0.15) return "#9acd32";
-  return "#2ecc71";
-}
+/**
+ * Re-exported, not redefined.
+ *
+ * There were two congestion palettes - this one and the map's - and they had
+ * already drifted apart, so a segment could read "heavy" in one place and be
+ * drawn amber in another. The map module owns the palette; everything else
+ * borrows it.
+ */
+export { congestionColour, trafficBand } from "@/components/map/layers";
 
 // ---------------------------------------------------------------- components
 export function Card({
@@ -104,6 +106,28 @@ export function Badge({
   children: ReactNode;
 }) {
   return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+/** Fallback labels for a server that predates `ownership_display`. */
+const OWNERSHIP_LABEL: Record<VehicleOwnership, string> = {
+  government: "Government",
+  private_hospital: "Private Hospital",
+  private_service: "Private Ambulance Service",
+  ngo: "NGO / Charitable Trust",
+};
+
+/**
+ * Who operates a vehicle. Crews and dispatchers both need this before they
+ * commit to a unit: it decides billing, the escalation contact and whether a
+ * dispatch agreement covers the run.
+ */
+export function OwnershipTag({ vehicle }: { vehicle: Pick<VehiclePayload, "ownership" | "ownership_display"> }) {
+  if (!vehicle.ownership) return null;
+  return (
+    <span className={`own-tag ${vehicle.ownership}`}>
+      {vehicle.ownership_display ?? OWNERSHIP_LABEL[vehicle.ownership] ?? vehicle.ownership}
+    </span>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
