@@ -139,6 +139,10 @@ HOSPITALS = [
 # (callsign, type, operator, is_als, ownership, registration)
 # Registrations are fixed rather than random so a demo screenshot, a bug report
 # and a test all name the same vehicle.
+#
+# Ten of them, because this is the pool a driver picks from at the start of a
+# shift and a picker with two entries does not demonstrate a choice. The three
+# demonstration units below are deliberately *not* in this list.
 AMBULANCES = [
     ("AMB-101", VehicleType.AMBULANCE, "108 Emergency Services", True,
      VehicleOwnership.GOVERNMENT, "TN 01 AE 4501"),
@@ -158,6 +162,24 @@ AMBULANCES = [
      VehicleOwnership.PRIVATE_HOSPITAL, "TN 07 BK 8813"),
     ("AMB-109", VehicleType.AMBULANCE, "Red Cross Society", False,
      VehicleOwnership.NGO, "TN 09 RC 1201"),
+    ("AMB-110", VehicleType.AMBULANCE, "MIOT International", True,
+     VehicleOwnership.PRIVATE_HOSPITAL, "TN 07 BK 8814"),
+]
+
+#: Permanently-running demonstration units.
+#:
+#: Kept on a rolling synthetic response by `apps.dispatch.journey` so that
+#: anyone opening the platform sees ambulances actually moving, corridors
+#: arming and ETAs counting down without first having to start a simulation.
+#: Numbered in a separate 2xx series and excluded from the takeover picker, so
+#: nobody mistakes one for a vehicle they can sign on to.
+DEMO_AMBULANCES = [
+    ("AMB-201", VehicleType.AMBULANCE, "SEVPS Demonstration", True,
+     VehicleOwnership.GOVERNMENT, "TN 01 DM 2001"),
+    ("AMB-202", VehicleType.AMBULANCE, "SEVPS Demonstration", False,
+     VehicleOwnership.PRIVATE_SERVICE, "TN 01 DM 2002"),
+    ("AMB-203", VehicleType.AMBULANCE, "SEVPS Demonstration", True,
+     VehicleOwnership.PRIVATE_HOSPITAL, "TN 01 DM 2003"),
 ]
 
 
@@ -467,29 +489,31 @@ class Command(BaseCommand):
             stations.append(station)
 
         vehicles = []
-        for callsign, vtype, operator, is_als, ownership, registration in AMBULANCES:
-            node = node_list[rng.randrange(len(node_list))]
-            vehicle, _ = EmergencyVehicle.objects.update_or_create(
-                callsign=callsign,
-                defaults={
-                    "vehicle_type": vtype,
-                    "ownership": ownership,
-                    "operator": operator,
-                    "home_station": rng.choice(stations),
-                    "status": VehicleStatus.AVAILABLE,
-                    "latitude": node.latitude,
-                    "longitude": node.longitude,
-                    "heading_deg": round(rng.uniform(0, 360), 1),
-                    "speed_kmh": 0.0,
-                    "last_seen_at": timezone.now(),
-                    "is_als": is_als,
-                    "crew_size": rng.choice([2, 2, 3]),
-                    "registration": registration,
-                    "equipment": ["defibrillator", "oxygen", "spine board"]
-                    + (["ventilator", "infusion pump"] if is_als else []),
-                },
-            )
-            vehicles.append(vehicle)
+        for is_demo, roster in ((False, AMBULANCES), (True, DEMO_AMBULANCES)):
+            for callsign, vtype, operator, is_als, ownership, registration in roster:
+                node = node_list[rng.randrange(len(node_list))]
+                vehicle, _ = EmergencyVehicle.objects.update_or_create(
+                    callsign=callsign,
+                    defaults={
+                        "vehicle_type": vtype,
+                        "ownership": ownership,
+                        "operator": operator,
+                        "home_station": rng.choice(stations),
+                        "status": VehicleStatus.AVAILABLE,
+                        "latitude": node.latitude,
+                        "longitude": node.longitude,
+                        "heading_deg": round(rng.uniform(0, 360), 1),
+                        "speed_kmh": 0.0,
+                        "last_seen_at": timezone.now(),
+                        "is_als": is_als,
+                        "is_demo": is_demo,
+                        "crew_size": rng.choice([2, 2, 3]),
+                        "registration": registration,
+                        "equipment": ["defibrillator", "oxygen", "spine board"]
+                        + (["ventilator", "infusion pump"] if is_als else []),
+                    },
+                )
+                vehicles.append(vehicle)
         return stations, vehicles
 
     # -- history ------------------------------------------------------------

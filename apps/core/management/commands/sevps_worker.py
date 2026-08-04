@@ -25,6 +25,7 @@ from django.utils import timezone
 from apps.alerts.dispatcher import clear_expired_boards
 from apps.core.live import tick_all as tick_live
 from apps.dispatch.corridor import tick_corridors
+from apps.dispatch.journey import tick as journey_tick
 from apps.network.cv import pipeline as cv_pipeline
 from apps.network.cv.backends import backend_name as cv_backend
 
@@ -39,6 +40,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--no-live", action="store_true",
             help="Skip the ETA/traffic/fleet live push sweep.",
+        )
+        parser.add_argument(
+            "--no-movement", action="store_true",
+            help="Do not advance vehicles along their routes or run demo units.",
         )
         parser.add_argument("--rollup-hour", type=int, default=1, help="Hour to roll up metrics.")
 
@@ -62,6 +67,17 @@ class Command(BaseCommand):
                 cleared = clear_expired_boards()
                 if cleared:
                     self.stdout.write(f"  cleared {cleared} display board(s)")
+
+                # Move in-transit vehicles along their planned routes, and keep
+                # the demonstration units running. Without this nothing advances
+                # a journey unless a real device is reporting GPS or `simulate`
+                # is running in another terminal.
+                if not options["no_movement"]:
+                    movement = journey_tick()
+                    if movement.get("moved"):
+                        self.stdout.write(f"  movement: {movement['moved']} vehicle(s) advanced")
+                    for callsign in movement.get("demo", {}).get("started", []):
+                        self.stdout.write(f"  demo unit {callsign} started a new response")
 
                 # Live pushes that no GPS fix would trigger: ETA decay, traffic
                 # changes from the CV sweep, and vehicles that have gone silent.

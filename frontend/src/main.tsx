@@ -9,6 +9,7 @@ import "@/styles/paramedic.css";
 import "@/styles/driver.css";
 import "@/styles/paramedic-portal.css";
 import "@/styles/driver-portal.css";
+import "@/styles/hospital-portal.css";
 
 const container = document.getElementById("root");
 if (!container) throw new Error("#root is missing from index.html");

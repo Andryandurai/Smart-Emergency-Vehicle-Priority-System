@@ -152,6 +152,12 @@
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .dp-card.emergency { border-color: rgba(255, 179, 0, .45); }
+/* An overdue inspection outranks everything else in the sidebar. */
+.dp-card.checklist-due {
+  border-color: var(--dp-bad);
+  background: linear-gradient(180deg, rgba(255, 82, 82, .12), var(--dp-panel) 60%);
+}
+.dp-card.checklist-due a.dp-btn { text-align: center; text-decoration: none; display: block; }
 .dp-card label { font-size: 11.5px; color: var(--dp-dim); margin-top: 4px; }
 .dp-card input,
 .dp-modal input,
@@ -476,6 +482,8 @@
 .dp-figure b.warn { color: var(--dp-warn); }
 .dp-figure b.bad { color: var(--dp-bad); }
 .dp-figure span { font-size: 9.5px; color: var(--dp-dim); text-transform: uppercase; letter-spacing: .5px; }
+.dp-hosp-choose { padding: 0 16px 13px; }
+.dp-btn.small { padding: 8px 14px; font-size: 12px; }
 .dp-hosp-detail {
   padding: 0 16px 16px; display: flex; flex-direction: column; gap: 8px;
   border-top: 1px solid var(--dp-line); padding-top: 12px;

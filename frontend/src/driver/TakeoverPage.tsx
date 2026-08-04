@@ -21,6 +21,7 @@ import { useOutletContext } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { shifts as shiftApi } from "@/api/endpoints";
 import type {
+  ChecklistDue,
   CrewPerson,
   CrewShift,
   EquipmentAnswer,
@@ -35,7 +36,7 @@ import { useAuthStore } from "@/stores/authStore";
 type Check = (EquipmentCheckPayload & Partial<ReadinessOutcome>) | null;
 
 export function TakeoverPage() {
-  const { shift, refreshShift } = useOutletContext<DriverOutletContext>();
+  const { shift, checklistDue, refreshShift } = useOutletContext<DriverOutletContext>();
   const username = useAuthStore((state) => state.user?.username ?? "");
   const [check, setCheck] = useState<Check>(null);
   const [loaded, setLoaded] = useState(false);
@@ -109,6 +110,31 @@ export function TakeoverPage() {
   if (!settled) return <Checklist shift={shift} onDone={reload} />;
   if (readiness === "not_ready") {
     return <Grounded shift={shift} check={check} onRecheck={() => setReinspecting(true)} />;
+  }
+
+  // The skipped check has come due: the emergency it was skipped for is over.
+  // The checklist is put straight on screen rather than behind a button,
+  // because this tab is where the driver was sent to do exactly this and an
+  // extra tap between them and it serves nobody.
+  if (checklistDue && !reinspecting) {
+    return (
+      <ChecklistDueNotice
+        due={checklistDue}
+        shift={shift}
+        onStart={() => setReinspecting(true)}
+      />
+    );
+  }
+  if (checklistDue && reinspecting) {
+    return (
+      <Checklist
+        shift={shift}
+        onDone={async () => {
+          setReinspecting(false);
+          await reload();
+        }}
+      />
+    );
   }
 
   return <OnDuty shift={shift} check={check} onEnded={reload} />;
@@ -381,6 +407,63 @@ function Checklist({ shift, onDone }: { shift: CrewShift; onDone: () => Promise<
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The skipped check, come due
+// ---------------------------------------------------------------------------
+/**
+ * Shown between patients when an emergency skip is still unpaid.
+ *
+ * There is no "not now". The vehicle is empty, the last patient is delivered,
+ * and this is the only moment in a shift when answering twenty-one questions
+ * costs nobody anything - which is precisely why it is the moment the platform
+ * insists on. The next emergency cannot be opened until it is done, here and
+ * on the server both.
+ */
+function ChecklistDueNotice({
+  due,
+  shift,
+  onStart,
+}: {
+  due: ChecklistDue;
+  shift: CrewShift;
+  onStart: () => void;
+}) {
+  return (
+    <div className="dp-page">
+      <div className="dp-hero bad">
+        <span className="dp-hero-tag">Check outstanding</span>
+        <h1>{shift.vehicle_callsign}</h1>
+        <p>Destination reached. The skipped readiness check is now due.</p>
+      </div>
+
+      <div className="dp-critical">{due.detail}</div>
+
+      <section className="dp-card">
+        <h4>
+          What was skipped
+          <span className="dp-chip bad">
+            {due.answered}/{due.total} answered
+          </span>
+        </h4>
+        <div className="dp-kv">
+          <span>Reason given</span>
+          <b>{due.skip_reason || "—"}</b>
+        </div>
+        <p className="dp-note">
+          You cannot start another emergency or take another patient until all{" "}
+          {due.total} items are answered.
+        </p>
+      </section>
+
+      <div className="dp-actions">
+        <button type="button" className="dp-btn primary" onClick={onStart}>
+          Start the {due.total}-point check
+        </button>
+      </div>
     </div>
   );
 }

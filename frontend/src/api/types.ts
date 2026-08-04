@@ -161,6 +161,21 @@ export interface RerouteCheck {
   congested: boolean;
 }
 
+/** What one movement sweep did. See apps/dispatch/journey.py. */
+export interface JourneyTick {
+  considered: number;
+  moved: number;
+  journeys: {
+    trip_id: number;
+    reference: string;
+    travelled_m: number;
+    remaining_m: number;
+    stage: string;
+  }[];
+  demo_completed?: number;
+  demo?: { started: string[]; running: string[]; total: number };
+}
+
 export interface Trip {
   id: number;
   uuid: string;
@@ -256,6 +271,143 @@ export interface Hospital {
   is_trauma_designated: boolean;
   facility_codes: string[];
   capacity: HospitalCapacity | null;
+}
+
+// ---------------------------------------------------------------------------
+// Hospital portal (the receiving hospital's own console)
+// ---------------------------------------------------------------------------
+/** Derived, never declared - see HospitalCapacity.status. */
+export type HospitalStatus = "ready" | "busy" | "full";
+
+export interface TeamRow {
+  field: string;
+  label: string;
+  ready: boolean;
+}
+
+export interface BedRow {
+  key: string;
+  label: string;
+  available: number;
+  total: number;
+}
+
+export interface HospitalDashboard {
+  hospital: {
+    id: number;
+    code: string;
+    name: string;
+    city: string;
+    emergency_phone: string;
+    is_trauma_designated: boolean;
+    is_on_diversion: boolean;
+    diversion_reason: string;
+    latitude: number;
+    longitude: number;
+  };
+  status: HospitalStatus;
+  active_ambulances_coming: number;
+  emergency_cases_today: number;
+  available_beds: number;
+  available_icu_beds: number;
+  available_ventilators: number;
+  available_operation_theatres: number;
+  emergency_staff_on_duty: number;
+  teams: TeamRow[];
+  teams_ready: number;
+  teams_total: number;
+  beds: BedRow[];
+  workload_index: number;
+  patients_waiting: number;
+  doctors_on_duty: number;
+  reported_at: string;
+  is_stale: boolean;
+}
+
+/** Clinical block, or `{ redacted: true }` for a role without clearance. */
+export interface InboundPatient {
+  redacted: boolean;
+  emergency_category?: string;
+  assessment?: string;
+  symptoms?: string[];
+  priority_level?: PriorityLevel;
+  patient_age?: number | null;
+  deteriorating?: boolean | null;
+  eta?: string | null;
+}
+
+export interface InboundAmbulance {
+  trip_id: number;
+  reference: string;
+  ambulance_number: string;
+  registration: string;
+  driver_name: string | null;
+  paramedic_name: string | null;
+  current_location: {
+    latitude: number;
+    longitude: number;
+    heading_deg: number;
+    speed_kmh: number;
+  };
+  eta: string | null;
+  distance_remaining_m: number | null;
+  current_status: string;
+  stage: TripStage;
+  vehicle_status: string;
+  emergency_level: PriorityLevel;
+  patient_category: string;
+  emergency_category: string;
+  patient: InboundPatient;
+  /** `[[lat, lon], ...]` for the per-ambulance navigation view. */
+  route_geometry: [number, number][];
+  destination: { latitude: number | null; longitude: number | null };
+  has_arrived: boolean;
+}
+
+export interface InboundBoard {
+  hospital: { id: number; code: string; name: string };
+  count: number;
+  ambulances: InboundAmbulance[];
+  breakdowns: Breakdown[];
+}
+
+/** Everything the Updates tab edits. Mirrors CapacityUpdateSerializer. */
+export interface HospitalEditableCapacity {
+  emergency_cases_today: number;
+  emergency_beds_total: number;
+  emergency_beds_available: number;
+  icu_beds_total: number;
+  icu_beds_available: number;
+  general_beds_total: number;
+  general_beds_available: number;
+  pediatric_beds_total: number;
+  pediatric_beds_available: number;
+  burn_unit_beds_total: number;
+  burn_unit_beds_available: number;
+  cardiac_icu_total: number;
+  cardiac_icu_available: number;
+  ventilators_total: number;
+  ventilators_available: number;
+  operation_theatres_total: number;
+  operation_theatres_free: number;
+  emergency_staff_on_duty: number;
+  doctors_on_duty: number;
+  patients_waiting: number;
+}
+
+export interface HospitalUpdateForm {
+  hospital: { id: number; code: string; name: string };
+  capacity: HospitalEditableCapacity;
+  teams: Record<string, boolean>;
+  team_rows: TeamRow[];
+  dashboard?: HospitalDashboard;
+}
+
+export interface HospitalChoice {
+  id: number;
+  code: string;
+  name: string;
+  city: string;
 }
 
 export interface EmergencyRuleSummary {
@@ -406,10 +558,27 @@ export interface CrewShift {
   equipment_check: EquipmentCheckPayload | null;
 }
 
+/**
+ * A skipped readiness check that has come due.
+ *
+ * Null while the crew are still running the emergency the check was skipped
+ * for - the skip buys that one response. Non-null once it has ended, at which
+ * point the server refuses to open another until the 21 items are answered.
+ */
+export interface ChecklistDue {
+  detail: string;
+  checklist_outstanding: true;
+  answered: number;
+  total: number;
+  skip_reason: string;
+  skipped_at: string | null;
+}
+
 export interface MyShift {
   shift: CrewShift | null;
   awaiting_my_acceptance: CrewShift[];
   role_hint: "driver" | "paramedic";
+  checklist_due?: ChecklistDue | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -87,9 +87,15 @@ class VehicleQuerySet(GeoQuerySet):
         its inspection, was still offered in the picker and then refused with
         a 409 on the tap. The three statuses must match ``open()`` exactly or
         the picker and the constraint disagree again.
+
+        Demonstration units are excluded outright rather than by status. They
+        spend most of their time on a synthetic response and so are already
+        filtered by the AVAILABLE test - but for the seconds between one demo
+        trip finishing and the next starting they would surface in the picker,
+        and a driver is not helped by an ambulance that drives itself away.
         """
         return (
-            self.filter(status=VehicleStatus.AVAILABLE)
+            self.filter(status=VehicleStatus.AVAILABLE, is_demo=False)
             .exclude(readiness__in=[VehicleReadiness.NOT_READY, VehicleReadiness.MAINTENANCE])
             .exclude(
                 shifts__status__in=[
@@ -170,6 +176,17 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
 
     # --- capability / crew --------------------------------------------------
     is_als = models.BooleanField(default=False, verbose_name="Advanced Life Support")
+    #: A permanently-running demonstration unit.
+    #:
+    #: Kept on a rolling synthetic response by :mod:`apps.dispatch.journey` so
+    #: there is always traffic on the map to look at. Excluded from the
+    #: takeover picker: a driver who claimed one would be handed an ambulance
+    #: that is already carrying a patient somewhere.
+    is_demo = models.BooleanField(
+        default=False,
+        verbose_name="Demonstration unit",
+        help_text="Always on a synthetic response. Cannot be taken over by a driver.",
+    )
     crew_size = models.PositiveSmallIntegerField(default=2)
     equipment = models.JSONField(default=list, blank=True)
     device_token = models.CharField(max_length=255, blank=True, help_text="Push notification token")

@@ -28,13 +28,14 @@
  */
 import type { CurrentUser } from "@/api/types";
 
-export type PortalId = "ops" | "driver" | "paramedic" | "public";
+export type PortalId = "ops" | "driver" | "paramedic" | "hospital" | "public";
 
 /** Where each portal starts. A redirect target, and a tab bar's first item. */
 export const PORTAL_HOME: Record<PortalId, string> = {
   ops: "/",
   driver: "/d",
   paramedic: "/p",
+  hospital: "/h",
   public: "/driver",
 };
 
@@ -63,13 +64,12 @@ export function portalForUser(user: CurrentUser | null): PortalId {
   if (user.is_superuser || roles.includes("administrators")) return "ops";
   if (roles.includes("paramedic_crew")) return "paramedic";
   if (roles.includes("ambulance_drivers")) return "driver";
-  if (
-    roles.includes("hospital_staff") ||
-    roles.includes("traffic_police") ||
-    roles.includes("dispatchers")
-  ) {
-    return "ops";
-  }
+  // A receiving hospital has its own console now - the board, the inbound
+  // ambulances and the ward's own figures. Before it existed, hospital staff
+  // were sent to the operations shell and given a city map they had no use
+  // for and mostly no permission to read.
+  if (roles.includes("hospital_staff")) return "hospital";
+  if (roles.includes("traffic_police") || roles.includes("dispatchers")) return "ops";
   return "public";
 }
 
@@ -83,6 +83,7 @@ export function portalForUser(user: CurrentUser | null): PortalId {
 export function portalForPath(pathname: string): PortalId {
   if (pathname === "/d" || pathname.startsWith("/d/")) return "driver";
   if (pathname === "/p" || pathname.startsWith("/p/")) return "paramedic";
+  if (pathname === "/h" || pathname.startsWith("/h/")) return "hospital";
   if (pathname === "/driver" || pathname === "/boards") return "public";
   return "ops";
 }

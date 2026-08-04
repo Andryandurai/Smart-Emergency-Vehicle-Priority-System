@@ -29,10 +29,13 @@ export async function signIn(page: Page, account: AccountName): Promise<void> {
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();
 
-  // Wait for the shell, not for a URL: the post-login destination differs by
-  // role, and asserting on "/" would fail for a role that lands elsewhere.
-  await expect(page.locator("header.topbar")).toBeVisible();
-  await expect(page.locator(".whoami .who")).toHaveText(username);
+  // Wait for *a* portal shell, not for a URL and not for the operations one:
+  // the post-login destination differs by role, and asserting on the topbar
+  // would fail for every role that has a portal of its own - which, since the
+  // hospital portal landed, is most of them.
+  await expect(
+    page.locator("header.topbar, .dp-root, .pm-root, .hp-root").first(),
+  ).toBeVisible();
 }
 
 export async function signOut(page: Page): Promise<void> {

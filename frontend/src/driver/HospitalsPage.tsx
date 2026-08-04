@@ -159,6 +159,22 @@ export function HospitalsPage() {
               </span>
             </button>
 
+            {/* Offered on the row itself, not only inside the expanded detail.
+                A patient asking to be taken somewhere else does so while the
+                ambulance is moving, and a driver should not have to open a
+                card to discover that changing the destination is possible. */}
+            {trip && !current && (
+              <div className="dp-hosp-choose">
+                <button
+                  type="button"
+                  className="dp-btn primary small"
+                  onClick={() => setChanging(hospital)}
+                >
+                  Take patient here instead
+                </button>
+              </div>
+            )}
+
             {capacity && (
               <div className="dp-cap">
                 <Figure value={capacity.emergency_beds_available} label="ED beds" />
@@ -221,15 +237,6 @@ export function HospitalsPage() {
                   ))}
                 </div>
 
-                {trip && !current && (
-                  <button
-                    type="button"
-                    className="dp-btn primary wide"
-                    onClick={() => setChanging(hospital)}
-                  >
-                    Take patient here instead
-                  </button>
-                )}
                 {!trip && (
                   <p className="dp-note">
                     Start an emergency before changing a destination.

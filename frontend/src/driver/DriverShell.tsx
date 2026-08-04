@@ -23,7 +23,7 @@ import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { profile as profileApi, shifts as shiftApi } from "@/api/endpoints";
-import type { CrewShift, StaffProfile } from "@/api/types";
+import type { ChecklistDue, CrewShift, StaffProfile } from "@/api/types";
 import { useAuthStore } from "@/stores/authStore";
 
 interface Tab {
@@ -53,6 +53,7 @@ export function DriverShell() {
   const logout = useAuthStore((state) => state.logout);
   const [me, setMe] = useState<StaffProfile | null>(null);
   const [shift, setShift] = useState<CrewShift | null>(null);
+  const [checklistDue, setChecklistDue] = useState<ChecklistDue | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -77,9 +78,15 @@ export function DriverShell() {
    */
   const refreshShift = useCallback(async () => {
     try {
-      setShift((await shiftApi.mine()).shift);
+      const mine = await shiftApi.mine();
+      setShift(mine.shift);
+      // Held at the shell so every tab agrees on it. The reminder has to
+      // appear on arrival *and* on any later visit to any tab, which a flag
+      // owned by one screen could not do.
+      setChecklistDue(mine.checklist_due ?? null);
     } catch {
       setShift(null);
+      setChecklistDue(null);
     }
   }, []);
 
@@ -154,7 +161,7 @@ export function DriverShell() {
         </header>
 
         <main className="dp-main">
-          <Outlet context={{ shift, refreshShift }} />
+          <Outlet context={{ shift, checklistDue, refreshShift }} />
         </main>
       </div>
     </div>
@@ -203,5 +210,7 @@ export function DriverAvatar({
 /** What the shell hands every tab through the router outlet. */
 export interface DriverOutletContext {
   shift: CrewShift | null;
+  /** Non-null when a skipped readiness check has come due. See ChecklistDue. */
+  checklistDue: ChecklistDue | null;
   refreshShift: () => Promise<void>;
 }

@@ -395,3 +395,24 @@ def priority_profiles(request):
 def corridor_tick(request):
     """Safety sweep endpoint - release expired holds (also run by the ticker)."""
     return Response(tick_corridors())
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticatedRole])
+def journey_tick(request):
+    """Advance in-transit vehicles along their routes, and keep demo units running.
+
+    The same sweep ``sevps_worker`` runs, exposed so a console can drive it
+    itself. The worker is a second process that a pilot or a demonstration
+    machine frequently is not running, and without it a trip was planned, a
+    corridor armed and a hospital alerted while the ambulance sat motionless
+    on every screen watching it.
+
+    Safe to call from several consoles at once: :mod:`apps.dispatch.journey`
+    derives progress from the vehicle's own position and ignores any vehicle
+    whose last fix is newer than a few seconds, so concurrent callers converge
+    on one journey rather than racing each other along it.
+    """
+    from apps.dispatch.journey import tick as journey_sweep
+
+    return Response(journey_sweep())

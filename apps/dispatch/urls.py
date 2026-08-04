@@ -12,5 +12,6 @@ router.register("directives", views.PriorityDirectiveViewSet, basename="directiv
 urlpatterns = [
     path("priority-profiles/", views.priority_profiles, name="dispatch-priority-profiles"),
     path("corridor/tick/", views.corridor_tick, name="dispatch-corridor-tick"),
+    path("journeys/tick/", views.journey_tick, name="dispatch-journey-tick"),
     path("", include(router.urls)),
 ]

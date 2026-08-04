@@ -28,11 +28,17 @@ import type {
   FleetRow,
   Hospital,
   HospitalCapacity,
+  HospitalChoice,
+  HospitalDashboard,
+  HospitalEditableCapacity,
+  HospitalUpdateForm,
   ExportDataset,
   HospitalLoad,
   HospitalChoiceReason,
+  InboundBoard,
   Hotspot,
   Inbox,
+  JourneyTick,
   LiveVehicles,
   MaintenanceReport,
   MyShift,
@@ -372,6 +378,17 @@ export const dispatch = {
   reroute: (tripId: number, reason = "driver requested") =>
     api.post<RoutePlanSummary>(`/api/v1/dispatch/trips/${tripId}/reroute/`, { reason }),
 
+  /**
+   * Advance in-transit vehicles one step along their routes.
+   *
+   * Driven from the navigation screens so an ambulance moves without a second
+   * process running. Idempotent and safe to call from several consoles: the
+   * server derives progress from the vehicle's own position and ignores any
+   * vehicle whose last fix is only seconds old, so callers converge on one
+   * journey instead of racing along it. See apps/dispatch/journey.py.
+   */
+  journeyTick: () => api.post<JourneyTick>("/api/v1/dispatch/journeys/tick/", {}),
+
   releaseCorridor: (tripId: number, reason: string) =>
     api.post<unknown>(`/api/v1/dispatch/trips/${tripId}/corridor/release/`, { reason }),
 };
@@ -423,6 +440,53 @@ export const hospitals = {
 
   acknowledgeAlert: (alertId: number, body: { acknowledged_by?: string; preparation_notes?: string }) =>
     api.post<unknown>(`/api/v1/hospitals/alerts/${alertId}/acknowledge/`, body),
+};
+
+// ---------------------------------------------------------------------------
+// Hospital portal - the receiving hospital's own console
+// ---------------------------------------------------------------------------
+/**
+ * `code` is a *request*, not an instruction. Where a deployment has bound a
+ * hospital to a staff group the server ignores it and serves the bound ward,
+ * so a client cannot read another hospital's board by changing a query string.
+ * See `resolve_hospital` in apps/hospitals/portal.py.
+ */
+export const hospitalPortal = {
+  choices: (signal?: AbortSignal) =>
+    api.get<{ hospitals: HospitalChoice[]; bound: boolean }>(
+      "/api/v1/hospitals/portal/choices/",
+      signal,
+    ),
+
+  dashboard: (code?: string, signal?: AbortSignal) =>
+    api.get<HospitalDashboard>(
+      `/api/v1/hospitals/portal/dashboard/${code ? `?hospital=${encodeURIComponent(code)}` : ""}`,
+      signal,
+    ),
+
+  ambulances: (code?: string, signal?: AbortSignal) =>
+    api.get<InboundBoard>(
+      `/api/v1/hospitals/portal/ambulances/${code ? `?hospital=${encodeURIComponent(code)}` : ""}`,
+      signal,
+    ),
+
+  updateForm: (code?: string, signal?: AbortSignal) =>
+    api.get<HospitalUpdateForm>(
+      `/api/v1/hospitals/portal/update/${code ? `?hospital=${encodeURIComponent(code)}` : ""}`,
+      signal,
+    ),
+
+  save: (body: {
+    hospital?: string;
+    capacity?: Partial<HospitalEditableCapacity>;
+    teams?: Record<string, boolean>;
+  }) => api.patch<HospitalUpdateForm>("/api/v1/hospitals/portal/update/", body),
+
+  /** The receiving team's half of the handover. */
+  patientReceived: (tripId: number, code?: string) =>
+    api.post<Trip>(`/api/v1/hospitals/portal/trips/${tripId}/received/`, {
+      ...(code ? { hospital: code } : {}),
+    }),
 };
 
 // ---------------------------------------------------------------------------

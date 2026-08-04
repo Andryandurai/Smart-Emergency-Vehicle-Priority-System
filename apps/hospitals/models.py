@@ -69,6 +69,14 @@ class Hospital(TimeStampedModel, UUIDModel, GeoPointModel):
         except HospitalCapacity.DoesNotExist:
             return HospitalCapacity.objects.create(hospital=self)
 
+    @property
+    def readiness(self) -> "HospitalTeamReadiness":
+        """Live team-readiness row, created on first access."""
+        try:
+            return self.team_readiness
+        except HospitalTeamReadiness.DoesNotExist:
+            return HospitalTeamReadiness.objects.create(hospital=self)
+
 
 class HospitalCapability(TimeStampedModel):
     """One facility a hospital holds, and whether it is usable right now.
@@ -110,6 +118,30 @@ class HospitalCapacity(TimeStampedModel):
     patients_waiting = models.PositiveIntegerField(default=0)
     doctors_on_duty = models.PositiveSmallIntegerField(default=3)
     reported_at = models.DateTimeField(default=timezone.now)
+
+    # --- ward-level detail, published by the hospital's own dashboard -------
+    #
+    # The four fields above are what the *recommender* needs, and they stayed
+    # deliberately few because every extra number is one more thing that can be
+    # stale at the moment a patient is being routed. These are what the
+    # hospital's own portal shows and edits: they are reported by the ward, not
+    # consumed by ranking, so an out-of-date pediatric count cannot misroute a
+    # cardiac case.
+    general_beds_total = models.PositiveIntegerField(default=60)
+    general_beds_available = models.PositiveIntegerField(default=20)
+    pediatric_beds_total = models.PositiveIntegerField(default=12)
+    pediatric_beds_available = models.PositiveIntegerField(default=5)
+    burn_unit_beds_total = models.PositiveIntegerField(default=6)
+    burn_unit_beds_available = models.PositiveIntegerField(default=2)
+    cardiac_icu_total = models.PositiveIntegerField(default=8)
+    cardiac_icu_available = models.PositiveIntegerField(default=3)
+    ventilators_total = models.PositiveIntegerField(default=6)
+    operation_theatres_total = models.PositiveIntegerField(default=4)
+    #: Nurses, technicians and doctors on the emergency floor right now.
+    #: Distinct from `doctors_on_duty`, which feeds the workload index.
+    emergency_staff_on_duty = models.PositiveSmallIntegerField(default=8)
+    #: Reset by the hospital each morning; shown on their dashboard.
+    emergency_cases_today = models.PositiveIntegerField(default=0)
 
     class Meta:
         verbose_name_plural = "hospital capacity"
@@ -153,6 +185,75 @@ class HospitalCapacity(TimeStampedModel):
         if requires_icu and self.icu_beds_available < 1:
             return False, "no ICU beds available"
         return True, "ok"
+
+    @property
+    def status(self) -> str:
+        """Ready / Busy / Full, as the hospital's own dashboard reports it.
+
+        Derived rather than declared, for the same reason vehicle readiness is:
+        a status somebody types is a status that stays "Ready" through a night
+        when every bed has gone. Diversion and an empty ED both mean full;
+        heavy workload or a nearly-full ED means busy.
+        """
+        if self.hospital.is_on_diversion or self.emergency_beds_available < 1:
+            return "full"
+        if self.workload_index >= 0.65 or self.emergency_occupancy >= 0.85:
+            return "busy"
+        return "ready"
+
+
+class HospitalTeamReadiness(TimeStampedModel):
+    """Which specialist teams a hospital can field right now.
+
+    Separate from :class:`HospitalCapacity` on purpose. Capacity answers "is
+    there a bed", which the recommender consumes on every routing decision;
+    this answers "is there a team", which is a shift-roster fact the hospital
+    maintains for its own board and for a crew deciding where to take a
+    patient. Keeping them apart means a roster edit cannot invalidate the
+    capacity feed that routing depends on.
+    """
+
+    hospital = models.OneToOneField(
+        Hospital, on_delete=models.CASCADE, related_name="team_readiness"
+    )
+    emergency_team_ready = models.BooleanField(default=True)
+    trauma_team_ready = models.BooleanField(default=True)
+    cardiology_ready = models.BooleanField(default=True)
+    neurology_ready = models.BooleanField(default=False)
+    burn_unit_ready = models.BooleanField(default=False)
+    icu_ready = models.BooleanField(default=True)
+    operation_theatre_ready = models.BooleanField(default=True)
+    blood_bank_ready = models.BooleanField(default=True)
+    reported_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name_plural = "hospital team readiness"
+
+    def __str__(self) -> str:
+        return f"{self.hospital.code} team readiness"
+
+    #: Field name -> label, in the order the hospital dashboard lists them.
+    TEAMS = (
+        ("emergency_team_ready", "Emergency Team"),
+        ("trauma_team_ready", "Trauma Team"),
+        ("cardiology_ready", "Cardiology"),
+        ("neurology_ready", "Neurology"),
+        ("burn_unit_ready", "Burn Unit"),
+        ("icu_ready", "ICU"),
+        ("operation_theatre_ready", "Operation Theatre"),
+        ("blood_bank_ready", "Blood Bank"),
+    )
+
+    @property
+    def ready_count(self) -> int:
+        return sum(1 for field, _ in self.TEAMS if getattr(self, field))
+
+    def as_rows(self) -> list[dict]:
+        """The board's rows, so the label and the flag cannot drift apart."""
+        return [
+            {"field": field, "label": label, "ready": getattr(self, field)}
+            for field, label in self.TEAMS
+        ]
 
 
 class EmergencyRule(TimeStampedModel):

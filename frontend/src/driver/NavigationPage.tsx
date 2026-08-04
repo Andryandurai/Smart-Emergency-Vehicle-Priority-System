@@ -20,16 +20,17 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Marker } from "react-leaflet";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 
 import { ApiError } from "@/api/client";
 import { dispatch as dispatchApi, shifts as shiftApi } from "@/api/endpoints";
-import type { Preemption, RerouteCheck, Trip, VehiclePayload } from "@/api/types";
+import type { ChecklistDue, Preemption, RerouteCheck, Trip, VehiclePayload } from "@/api/types";
 import { MapCanvas, ROUTE_BLUE, RouteLine, vehicleIcon } from "@/components/MapCanvas";
 import { ChaseCamera, HeadingRotation } from "@/components/driver/NavMap";
 import { fmtDistance, fmtEta } from "@/components/ui";
 import { DpError } from "@/driver/TakeoverPage";
 import type { DriverOutletContext } from "@/driver/DriverShell";
+import { useJourneyTick } from "@/hooks/useJourneyTick";
 import { useSocket } from "@/hooks/useSocket";
 
 /**
@@ -48,7 +49,7 @@ const STAGES: { value: string; label: string; hint: string }[] = [
 ];
 
 export function NavigationPage() {
-  const { shift } = useOutletContext<DriverOutletContext>();
+  const { shift, checklistDue } = useOutletContext<DriverOutletContext>();
   const [vehicle, setVehicle] = useState<VehiclePayload | null>(null);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [corridor, setCorridor] = useState<Preemption[]>([]);
@@ -109,6 +110,11 @@ export function NavigationPage() {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Drive the journey. The positions this produces arrive back through the
+  // same `vehicle_position` socket event a real device would send, so the
+  // marker below moves without this screen knowing where the fix came from.
+  useJourneyTick(active && Boolean(trip));
 
   /**
    * Watch the road ahead.
@@ -289,7 +295,14 @@ export function NavigationPage() {
 
         <DpError error={error} />
 
-        <EmergencyControl trip={trip} onChanged={reloadTrip} shiftId={shift?.id ?? null} />
+        {checklistDue && <ChecklistReminder due={checklistDue} />}
+
+        <EmergencyControl
+          trip={trip}
+          onChanged={reloadTrip}
+          shiftId={shift?.id ?? null}
+          checklistDue={checklistDue}
+        />
 
         {trip && (
           <section className="dp-card">
@@ -365,14 +378,45 @@ export function NavigationPage() {
  * enforces it too — this is the half that makes it comprehensible, by naming
  * the two ways out rather than only refusing.
  */
+/**
+ * The skipped inspection, come due.
+ *
+ * Shown on arrival and on every visit afterwards until the 21 items are
+ * answered. It is not dismissible: the whole failure mode of an emergency skip
+ * is that "later" never arrives, and a reminder with an X on it is a reminder
+ * that gets an X pressed on it. The way out is the checklist, so that is the
+ * only button.
+ */
+function ChecklistReminder({ due }: { due: ChecklistDue }) {
+  return (
+    <section className="dp-card checklist-due">
+      <h4>
+        Vehicle check outstanding
+        <span className="dp-chip bad">
+          {due.answered}/{due.total}
+        </span>
+      </h4>
+      <p className="dp-lead">
+        You reached your destination. The readiness check skipped earlier —
+        “{due.skip_reason}” — must be completed before you take another patient.
+      </p>
+      <Link className="dp-btn primary wide" to="/d">
+        Complete the 21-point check now
+      </Link>
+    </section>
+  );
+}
+
 function EmergencyControl({
   trip,
   shiftId,
   onChanged,
+  checklistDue,
 }: {
   trip: Trip | null;
   shiftId: number | null;
   onChanged: () => Promise<void>;
+  checklistDue: ChecklistDue | null;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -398,17 +442,28 @@ function EmergencyControl({
     return (
       <section className="dp-card">
         <h4>Emergency</h4>
-        <p className="dp-note">No emergency is running. You are available for dispatch.</p>
+        <p className="dp-note">
+          {checklistDue
+            ? "Blocked until the outstanding vehicle check is completed."
+            : "No emergency is running. You are available for dispatch."}
+        </p>
         <DpError error={error} />
         <button
           type="button"
           className="dp-btn primary wide"
-          disabled={busy !== null || shiftId === null}
+          // The server refuses this too - see `_outstanding_skip` in
+          // crew_api.py. Disabling it here is so the driver is told why
+          // before they press it, not instead of the server saying no.
+          disabled={busy !== null || shiftId === null || checklistDue !== null}
           onClick={() =>
             void run("new", () => shiftApi.newEmergency(shiftId as number))
           }
         >
-          {busy === "new" ? "Opening…" : "Start emergency"}
+          {busy === "new"
+            ? "Opening…"
+            : checklistDue
+              ? "Vehicle check required first"
+              : "Start emergency"}
         </button>
       </section>
     );

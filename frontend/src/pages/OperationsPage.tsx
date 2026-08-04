@@ -33,6 +33,7 @@ import {
   fmtTime,
   levelClass,
 } from "@/components/ui";
+import { useJourneyTick } from "@/hooks/useJourneyTick";
 import { usePolling } from "@/hooks/usePolling";
 import { useSocket } from "@/hooks/useSocket";
 import type { EtaUpdate } from "@/stores/opsStore";
@@ -98,6 +99,18 @@ export function OperationsPage() {
 
   const basemap =
     gis.basemaps?.providers.find((provider) => provider.id === basemapId) ?? null;
+
+  /**
+   * Drive the fleet.
+   *
+   * The control room was showing vehicles that were *active* but parked: a
+   * trip had a route and an ETA, and nothing advanced the ambulance along it
+   * unless a real device was reporting or `simulate` was running elsewhere.
+   * The same sweep the crew consoles use fixes it here, and because the
+   * positions come back as ordinary `vehicle_position` events, every marker,
+   * corridor and ETA on this screen updates through the path it already had.
+   */
+  useJourneyTick(true);
 
   // Polling is the correctness floor; the socket below is the latency win.
   usePolling((signal) => store.refreshVehicles(signal), 2000);

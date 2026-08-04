@@ -101,10 +101,16 @@ test.describe("operations console", () => {
 });
 
 test.describe("hospital console", () => {
+  /**
+   * Hospital staff now have a portal of their own, so this no longer asserts
+   * that they can open the operations console's hospital list - they cannot,
+   * and should not. `/hospitals` is a control-room screen; theirs is `/h`.
+   * The portal's own behaviour is covered by portals.spec.ts.
+   */
   test("hospital staff reach their own dashboard", async ({ page }) => {
     await signIn(page, "hospital");
-    await page.goto("/hospitals");
-    await expect(page.getByRole("heading", { name: /hospital/i }).first()).toBeVisible();
+    await expect(page.locator(".hp-root")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   });
 });
 

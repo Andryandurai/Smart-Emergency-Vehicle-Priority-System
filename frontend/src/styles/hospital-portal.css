@@ -1,0 +1,373 @@
+/* ===================================================================
+   Hospital portal.
+
+   The fourth visual language. The other three are all dark, because
+   they are read in a control room, a cab at night and a moving
+   ambulance. This is a board on the wall of a brightly lit emergency
+   department, watched from across the room - so it is light, the
+   figures are very large, and the contrast is built for glare rather
+   than for darkness.
+
+   Navigation geometry, which is what actually keeps the four apart:
+     operations  top bar
+     driver      left rail
+     paramedic   bottom bar
+     hospital    tab strip under a status header
+
+   Everything is scoped under `.hp-root` and prefixed `hp-`. Nothing
+   here reaches into the other portals and none of them reach in here.
+   =================================================================== */
+
+.hp-root {
+  --hp-bg: #f4f6f9;
+  --hp-card: #ffffff;
+  --hp-line: #d9e0e8;
+  --hp-text: #16202b;
+  --hp-dim: #62717f;
+  --hp-accent: #0b6bcb;
+  --hp-ok: #128a52;
+  --hp-warn: #b26a00;
+  --hp-bad: #c62828;
+
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: var(--hp-bg);
+  color: var(--hp-text);
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------ header */
+.hp-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 22px; background: var(--hp-card);
+  border-bottom: 1px solid var(--hp-line);
+}
+.hp-identity { display: flex; align-items: center; gap: 18px; min-width: 0; }
+.hp-brand { display: flex; flex-direction: column; line-height: 1.15; }
+.hp-mark { font-weight: 800; letter-spacing: 2px; font-size: 17px; color: var(--hp-accent); }
+.hp-sub {
+  font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--hp-dim);
+}
+.hp-hospital { border-left: 1px solid var(--hp-line); padding-left: 18px; min-width: 0; }
+.hp-hospital-name {
+  font-size: 16px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hp-hospital-meta { font-size: 11.5px; color: var(--hp-dim); }
+
+.hp-header-right { display: flex; align-items: center; gap: 12px; }
+.hp-user { font-size: 12.5px; color: var(--hp-dim); }
+.hp-signout {
+  padding: 7px 13px; font-size: 12px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--hp-line); color: var(--hp-dim);
+}
+.hp-signout:hover { color: var(--hp-text); border-color: var(--hp-dim); }
+.hp-picker {
+  padding: 7px 10px; font-size: 12.5px; border-radius: 8px;
+  border: 1px solid var(--hp-line); background: #fff; color: var(--hp-text);
+}
+
+/* The status pill. Present in the header on every tab, so it never depends
+   on which screen somebody happened to leave up. */
+.hp-status {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 13px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+}
+.hp-status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.hp-status.ready { background: #e3f5ec; color: var(--hp-ok); }
+.hp-status.busy { background: #fdf0dd; color: var(--hp-warn); }
+.hp-status.full { background: #fde9e9; color: var(--hp-bad); }
+.hp-status.big { font-size: 15px; padding: 9px 20px; }
+.hp-status.ready .hp-status-dot { animation: hp-pulse 2s ease-in-out infinite; }
+@keyframes hp-pulse { 50% { opacity: .35; } }
+
+/* --------------------------------------------------------- tab strip */
+.hp-tabs {
+  display: flex; align-items: stretch; gap: 2px;
+  padding: 0 22px; background: var(--hp-card);
+  border-bottom: 1px solid var(--hp-line);
+}
+.hp-tab {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  padding: 12px 20px; text-decoration: none; color: var(--hp-dim);
+  font-size: 13.5px; font-weight: 650; border-bottom: 3px solid transparent;
+}
+.hp-tab:hover { color: var(--hp-text); background: #f7f9fb; }
+.hp-tab.active { color: var(--hp-accent); border-bottom-color: var(--hp-accent); }
+.hp-tab-count {
+  min-width: 20px; padding: 1px 7px; border-radius: 999px;
+  background: var(--hp-bad); color: #fff; font-size: 11px; font-weight: 800;
+  text-align: center;
+}
+.hp-tab-here { display: none; }
+
+/* --------------------------------------------------------------- body */
+.hp-main { overflow-y: auto; min-height: 0; }
+.hp-page {
+  max-width: 1180px; margin: 0 auto; padding: 20px 22px 44px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.hp-loading { padding: 48px; text-align: center; color: var(--hp-dim); }
+.hp-h1 {
+  margin: 0; font-size: 22px; font-weight: 750;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.hp-lead { margin: 0; color: var(--hp-dim); font-size: 13px; line-height: 1.55; }
+.hp-dim { color: var(--hp-dim); font-size: 11.5px; }
+.hp-count {
+  font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+  background: #eaf1f8; color: var(--hp-accent);
+}
+.hp-count.unsaved { background: #fdf0dd; color: var(--hp-warn); }
+
+.hp-card {
+  background: var(--hp-card); border: 1px solid var(--hp-line);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.hp-card h2 {
+  margin: 0; font-size: 12px; font-weight: 750; letter-spacing: 1.1px;
+  text-transform: uppercase; color: var(--hp-dim);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.hp-card h3 {
+  margin: 0 0 8px; font-size: 11.5px; font-weight: 750; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--hp-dim);
+}
+
+.hp-error {
+  background: #fde9e9; border: 1px solid #f3b8b8; color: #8e1d1d;
+  padding: 10px 13px; border-radius: 9px; font-size: 13px;
+}
+.hp-warn {
+  background: #fdf6e6; border-left: 4px solid var(--hp-warn); color: #6d4700;
+  padding: 10px 13px; border-radius: 0 9px 9px 0; font-size: 12.5px; line-height: 1.5;
+}
+.hp-warn.small { font-size: 11.5px; padding: 7px 11px; }
+.hp-empty {
+  padding: 30px; border: 1px dashed var(--hp-line); border-radius: 12px;
+  color: var(--hp-dim); font-size: 13.5px; text-align: center; background: var(--hp-card);
+}
+
+/* ---------------------------------------------------------- dashboard */
+.hp-hero {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  flex-wrap: wrap;
+  background: var(--hp-card); border: 1px solid var(--hp-line);
+  border-left: 6px solid var(--hp-dim);
+  border-radius: 14px; padding: 20px 24px;
+}
+.hp-hero.ready { border-left-color: var(--hp-ok); }
+.hp-hero.busy { border-left-color: var(--hp-warn); }
+.hp-hero.full { border-left-color: var(--hp-bad); }
+.hp-hero-id h1 { margin: 0; font-size: 26px; font-weight: 780; }
+.hp-hero-id p { margin: 4px 0 0; font-size: 13px; color: var(--hp-dim); }
+.hp-hero-status { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.hp-hero-copy { font-size: 12px; color: var(--hp-dim); }
+
+.hp-figures {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+}
+.hp-figure {
+  background: var(--hp-card); border: 1px solid var(--hp-line); border-radius: 12px;
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 4px;
+}
+.hp-figure b { font-size: 34px; font-weight: 800; line-height: 1; }
+.hp-figure span {
+  font-size: 11px; color: var(--hp-dim); text-transform: uppercase; letter-spacing: .6px;
+}
+.hp-figure.ok b { color: var(--hp-ok); }
+.hp-figure.warn b { color: var(--hp-warn); }
+.hp-figure.bad b { color: var(--hp-bad); }
+.hp-figure.live { border-color: var(--hp-accent); box-shadow: inset 0 0 0 1px var(--hp-accent); }
+.hp-figure.live b { color: var(--hp-accent); }
+
+.hp-teams {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.hp-team {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 13px; border-radius: 10px; border: 1px solid var(--hp-line);
+  background: #fafbfc;
+}
+.hp-team-light { width: 10px; height: 10px; border-radius: 50%; background: var(--hp-line); }
+.hp-team.ready { border-color: #b7e3cd; background: #f2fbf6; }
+.hp-team.ready .hp-team-light { background: var(--hp-ok); }
+.hp-team.not { border-color: #f0cccc; background: #fdf5f5; }
+.hp-team.not .hp-team-light { background: var(--hp-bad); }
+.hp-team-label { flex: 1; font-size: 13px; font-weight: 600; }
+.hp-team-state { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+.hp-team.ready .hp-team-state { color: var(--hp-ok); }
+.hp-team.not .hp-team-state { color: var(--hp-bad); }
+
+.hp-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.hp-table th {
+  text-align: left; font-size: 10.5px; font-weight: 750; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--hp-dim);
+  padding: 6px 10px; border-bottom: 1px solid var(--hp-line);
+}
+.hp-table td { padding: 9px 10px; border-bottom: 1px solid #eef2f6; }
+.hp-table tr:last-child td { border-bottom: none; }
+.hp-table b { font-size: 15px; }
+.hp-table b.ok { color: var(--hp-ok); }
+.hp-table b.warn { color: var(--hp-warn); }
+.hp-table b.bad { color: var(--hp-bad); }
+.hp-table.edit input { width: 92px; }
+
+.hp-bar {
+  display: block; height: 8px; border-radius: 999px; background: #e8edf2; overflow: hidden;
+  min-width: 90px;
+}
+.hp-bar-fill { display: block; height: 100%; background: var(--hp-ok); }
+.hp-bar-fill.busy { background: var(--hp-warn); }
+.hp-bar-fill.full { background: var(--hp-bad); }
+
+.hp-kv-grid {
+  display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.hp-kv {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 6px 0; border-bottom: 1px dashed #e8edf2; font-size: 13.5px;
+}
+.hp-kv:last-child { border-bottom: none; }
+.hp-kv span { color: var(--hp-dim); font-size: 11.5px; }
+.hp-kv.column { flex-direction: column; align-items: stretch; gap: 5px; }
+
+/* --------------------------------------------------------- ambulances */
+.hp-amb-list { display: flex; flex-direction: column; gap: 10px; }
+.hp-amb {
+  background: var(--hp-card); border: 1px solid var(--hp-line);
+  border-left: 6px solid var(--hp-dim); border-radius: 12px; overflow: hidden;
+}
+.hp-amb.l1 { border-left-color: var(--hp-bad); }
+.hp-amb.l2 { border-left-color: var(--hp-warn); }
+.hp-amb.l3 { border-left-color: var(--hp-accent); }
+.hp-amb.l4 { border-left-color: var(--hp-dim); }
+.hp-amb.arrived { background: #f2fbf6; }
+.hp-amb.open { box-shadow: 0 2px 14px rgba(16, 32, 48, .09); }
+
+.hp-amb-head {
+  width: 100%; display: grid; align-items: center; gap: 14px;
+  grid-template-columns: 34px minmax(120px, 1fr) minmax(180px, 1.4fr) 130px minmax(150px, 1fr);
+  padding: 13px 16px; cursor: pointer;
+  background: transparent; border: none; color: inherit; text-align: left;
+}
+.hp-amb-order {
+  width: 26px; height: 26px; border-radius: 50%; background: #eef2f6;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: var(--hp-dim);
+}
+.hp-amb-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hp-amb-number { font-size: 17px; font-weight: 800; letter-spacing: .4px; }
+.hp-amb-crew {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;
+  align-items: baseline; font-size: 12.5px; min-width: 0;
+}
+.hp-amb-crew b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-amb-eta { display: flex; flex-direction: column; gap: 2px; }
+.hp-amb-eta b { font-size: 17px; font-weight: 800; color: var(--hp-accent); }
+.hp-amb-flags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-level {
+  padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 800;
+  background: #eef2f6; color: var(--hp-dim);
+}
+.hp-level.l1 { background: #fde9e9; color: var(--hp-bad); }
+.hp-level.l2 { background: #fdf0dd; color: var(--hp-warn); }
+.hp-level.l3 { background: #eaf1f8; color: var(--hp-accent); }
+.hp-category { font-size: 12.5px; font-weight: 600; }
+
+.hp-amb-detail {
+  border-top: 1px solid var(--hp-line); padding: 16px;
+  display: grid; gap: 16px; grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr);
+}
+.hp-amb-nav { grid-row: span 2; min-height: 300px; border-radius: 10px; overflow: hidden; }
+.hp-map { width: 100%; height: 100%; min-height: 300px; }
+.hp-amb-info { display: flex; flex-direction: column; gap: 16px; }
+.hp-amb-actions { grid-column: 2; display: flex; justify-content: flex-end; }
+.hp-symptoms { display: flex; flex-wrap: wrap; gap: 5px; }
+.hp-symptom {
+  font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+  background: #eaf1f8; color: var(--hp-accent); font-weight: 600;
+}
+.hp-assessment {
+  margin: 0; font-size: 13px; line-height: 1.55;
+  background: #f7f9fb; border-radius: 8px; padding: 9px 11px;
+}
+
+.hp-breakdown {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: #fde9e9; border: 1px solid #f3b8b8; border-radius: 12px;
+  padding: 12px 15px; font-size: 13px; line-height: 1.5;
+}
+.hp-breakdown-tag {
+  flex: 0 0 auto; font-size: 10px; font-weight: 800; letter-spacing: .8px;
+  text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
+  background: var(--hp-bad); color: #fff;
+}
+
+/* ------------------------------------------------------------ updates */
+.hp-edit-grid {
+  display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.hp-field { display: flex; flex-direction: column; gap: 5px; }
+.hp-field > span { font-size: 11.5px; color: var(--hp-dim); }
+.hp-field-error { font-size: 11px; color: var(--hp-bad); font-style: normal; }
+.hp-root input[type="number"] {
+  padding: 9px 11px; border-radius: 8px; border: 1px solid var(--hp-line);
+  background: #fff; color: var(--hp-text); font-size: 15px; font-weight: 650;
+  width: 100%;
+}
+.hp-root input[type="number"]:focus { outline: none; border-color: var(--hp-accent); }
+.hp-root input[type="number"].bad { border-color: var(--hp-bad); background: #fdf5f5; }
+
+.hp-team-edit {
+  display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.hp-toggle {
+  display: flex; align-items: center; gap: 11px; cursor: pointer; text-align: left;
+  padding: 10px 13px; border-radius: 10px;
+  border: 1px solid var(--hp-line); background: #fafbfc; color: inherit;
+}
+.hp-toggle.on { border-color: #b7e3cd; background: #f2fbf6; }
+.hp-toggle-track {
+  flex: 0 0 auto; width: 36px; height: 20px; border-radius: 999px;
+  background: #cdd6df; position: relative; transition: background .15s;
+}
+.hp-toggle.on .hp-toggle-track { background: var(--hp-ok); }
+.hp-toggle-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .15s;
+}
+.hp-toggle.on .hp-toggle-knob { transform: translateX(16px); }
+.hp-toggle-label { flex: 1; font-size: 13px; font-weight: 600; }
+.hp-toggle-state { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--hp-dim); }
+.hp-toggle.on .hp-toggle-state { color: var(--hp-ok); }
+
+.hp-save-bar {
+  position: sticky; bottom: 0; display: flex; gap: 10px; justify-content: flex-end;
+  padding: 12px 0 0; background: linear-gradient(180deg, transparent, var(--hp-bg) 40%);
+}
+.hp-btn {
+  padding: 11px 20px; border-radius: 9px; font-size: 13.5px; font-weight: 700;
+  cursor: pointer; border: 1px solid transparent;
+}
+.hp-btn:disabled { opacity: .45; cursor: not-allowed; }
+.hp-btn.primary { background: var(--hp-accent); color: #fff; }
+.hp-btn.primary:hover:not(:disabled) { background: #0a5cae; }
+.hp-btn.ghost { background: #fff; border-color: var(--hp-line); color: var(--hp-dim); }
+.hp-btn.ghost:hover:not(:disabled) { color: var(--hp-text); border-color: var(--hp-dim); }
+
+/* ------------------------------------------------------------- narrow */
+@media (max-width: 900px) {
+  .hp-amb-head { grid-template-columns: 30px 1fr; row-gap: 8px; }
+  .hp-amb-crew, .hp-amb-eta, .hp-amb-flags { grid-column: 2; }
+  .hp-amb-detail { grid-template-columns: 1fr; }
+  .hp-amb-nav { grid-row: auto; }
+  .hp-amb-actions { grid-column: 1; }
+  .hp-hospital { display: none; }
+}

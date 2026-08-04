@@ -58,7 +58,24 @@
 }
 
 /* --------------------------------------------------------------- body */
-.pm-main { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+/*
+ * A single stretching row, rather than a plain scroll box.
+ *
+ * The navigation screen asks to fill this area with `height: 100%`, and a
+ * percentage height only resolves against a parent with a definite one. As a
+ * bare block this had none, so the nav sized itself to its content and left a
+ * 125-pixel strip of background between the details panel and the tab bar -
+ * measured, not estimated, by e2e/paramedic-nav.spec.ts.
+ *
+ * A grid row stretches its item by default, so the nav now fills the space
+ * whether or not the percentage resolves. `minmax(0, 1fr)` keeps longer pages
+ * scrolling: the row may not grow past the shell, so a tall page overflows
+ * into this element's own scrollbar exactly as before.
+ */
+.pm-main {
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0;
+}
 .pm-page {
   max-width: 620px; margin: 0 auto; padding: 16px 16px 28px;
   display: flex; flex-direction: column; gap: 14px;
@@ -327,8 +344,10 @@
 .pm-tab-label { font-weight: 600; }
 
 /* ---------------------------------------------------------- navigation */
-.pm-nav { display: grid; grid-template-rows: 1fr auto; height: 100%; }
-.pm-nav-map { position: relative; overflow: hidden; min-height: 300px; }
+/* `min-height: 0` so the map row may shrink below its content instead of
+   pushing the details panel down and the tab bar off the bottom. */
+.pm-nav { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100%; min-height: 0; }
+.pm-nav-map { position: relative; overflow: hidden; min-height: 240px; }
 .pm-nav-map .nav-map { height: 100%; width: 100%; }
 .pm-nav-map .leaflet-control-zoom { display: none; }
 .pm-nav-hud {
@@ -349,8 +368,19 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pm-nav-stage { font-size: 11.5px; color: var(--pm-muted); }
+/*
+ * Capped against the viewport, not the row.
+ *
+ * `max-height: 46%` looked equivalent and was not: the percentage resolved
+ * against the grid row this element sizes, so the row was laid out at 231px,
+ * the cap became 46% of *that* - 106px - and the remaining 125px of the row
+ * stayed empty. That was the blank strip between the details panel and the tab
+ * bar. A viewport unit expresses the same intent ("never more than about half
+ * the screen") with nothing circular in it, so the row is content-sized and the
+ * panel fills it exactly.
+ */
 .pm-nav-side {
-  max-height: 46%; overflow-y: auto; padding: 12px;
+  max-height: 46vh; overflow-y: auto; padding: 12px;
   display: flex; flex-direction: column; gap: 10px;
   border-top: 1px solid var(--pm-line); background: #10161f;
 }

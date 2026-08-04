@@ -21,12 +21,13 @@ const ACCOUNTS = {
   admin: { username: "admin", password: "sevps-admin", root: "header.topbar", home: "/" },
   driver: { username: "driver", password: "sevps-driver", root: ".dp-root", home: "/d" },
   paramedic: { username: "paramedic", password: "sevps-paramedic", root: ".pm-root", home: "/p" },
+  hospital: { username: "hospital", password: "sevps-hospital", root: ".hp-root", home: "/h" },
 } as const;
 
 type Who = keyof typeof ACCOUNTS;
 
 /** Every portal root. Exactly one may ever be present. */
-const ROOTS = ["header.topbar", ".dp-root", ".pm-root"] as const;
+const ROOTS = ["header.topbar", ".dp-root", ".pm-root", ".hp-root"] as const;
 
 async function signIn(page: Page, who: Who): Promise<void> {
   const account = ACCOUNTS[who];
@@ -54,7 +55,7 @@ async function onlyPortalOf(page: Page, who: Who): Promise<void> {
 
 test.describe("portal isolation", () => {
   test("each role lands in its own portal and sees no other portal's shell", async ({ page }) => {
-    for (const who of ["admin", "driver", "paramedic"] as const) {
+    for (const who of ["admin", "driver", "paramedic", "hospital"] as const) {
       await signIn(page, who);
       await expect(page).toHaveURL(new RegExp(`${ACCOUNTS[who].home.replace("/", "\\/")}$`));
       await onlyPortalOf(page, who);
@@ -105,13 +106,34 @@ test.describe("portal isolation", () => {
     }
   });
 
-  test("an administrator cannot land in the driver or paramedic portals", async ({ page }) => {
+  test("an administrator cannot land in the crew or hospital portals", async ({ page }) => {
     await signIn(page, "admin");
-    for (const path of ["/d", "/d/navigate", "/p", "/p/profile"]) {
+    for (const path of ["/d", "/d/navigate", "/p", "/p/profile", "/h", "/h/ambulances"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/$/);
       await onlyPortalOf(page, "admin");
     }
+  });
+
+  test("hospital staff get the hospital portal, not the operations console", async ({ page }) => {
+    await signIn(page, "hospital");
+    await expect(page).toHaveURL(/\/h$/);
+    await onlyPortalOf(page, "hospital");
+
+    // Including the screens they used to be handed: before this portal
+    // existed, a hospital login landed on the control room's city map.
+    for (const path of ["/", "/fleet", "/analytics", "/hospitals", "/d", "/p", "/boards"]) {
+      await page.goto(path);
+      await expect(page).toHaveURL(/\/h(\/|$)/);
+      await onlyPortalOf(page, "hospital");
+    }
+  });
+
+  test("the hospital portal has exactly its three tabs", async ({ page }) => {
+    await signIn(page, "hospital");
+    const tabs = page.locator(".hp-tabs .hp-tab");
+    await expect(tabs).toHaveCount(3);
+    await expect(tabs).toHaveText([/Dashboard/, /Ambulances/, /Updates/]);
   });
 
   test("the driver portal has exactly its four tabs", async ({ page }) => {

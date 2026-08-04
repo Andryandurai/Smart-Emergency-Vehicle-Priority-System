@@ -223,6 +223,11 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
                 "shift": CrewShiftSerializer(mine).data if mine else None,
                 "awaiting_my_acceptance": CrewShiftSerializer(awaiting, many=True).data,
                 "role_hint": "driver" if mine and mine.driver_id == request.user.id else "paramedic",
+                # Whether a skipped inspection has come due. Served from here
+                # so the console never has to re-derive the rule that
+                # `new_emergency` enforces - two implementations of "may this
+                # crew take another patient" is one too many.
+                "checklist_due": self._outstanding_skip(mine) if mine else None,
             }
         )
 
@@ -403,6 +408,45 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
         broadcast_ops("shift_ended", payload)
         return Response(payload)
 
+    @staticmethod
+    def _outstanding_skip(shift) -> dict | None:
+        """The refusal payload when a skipped check has come due, else None.
+
+        Due means: the inspection was skipped, is still not finished, and the
+        response it was skipped for has since ended. Checking that a trip
+        actually completed - rather than simply that a skip exists - is what
+        keeps the emergency skip usable: the crew who skipped it are still
+        allowed to run the call they skipped it for.
+        """
+        from apps.dispatch.models import EmergencyTrip
+
+        check = getattr(shift, "equipment_check", None)
+        if check is None or not check.skipped or not check.is_outstanding:
+            return None
+
+        finished = EmergencyTrip.objects.filter(
+            vehicle=shift.vehicle,
+            stage__in=[TripStage.HANDOVER, TripStage.CANCELLED],
+        )
+        if check.skipped_at:
+            finished = finished.filter(updated_at__gte=check.skipped_at)
+        if not finished.exists():
+            return None
+
+        return {
+            "detail": (
+                f"{shift.vehicle.callsign} still owes its vehicle readiness check. "
+                f"It was skipped for the last emergency "
+                f"(“{check.skip_reason}”) and must be completed before "
+                f"another patient is taken."
+            ),
+            "checklist_outstanding": True,
+            "answered": check.answered_count,
+            "total": len(EQUIPMENT_CATALOGUE),
+            "skip_reason": check.skip_reason,
+            "skipped_at": check.skipped_at,
+        }
+
     @action(detail=True, methods=["post"], url_path="new-emergency")
     def new_emergency(self, request, pk=None):
         """Open a response for this crew's own ambulance.
@@ -435,6 +479,21 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
 
         vehicle = shift.vehicle
         existing = vehicle.active_trip
+
+        # The skipped inspection comes due once the emergency it was skipped
+        # for is over.
+        #
+        # An emergency skip buys exactly one response - that is its whole
+        # purpose, and refusing that response would make the skip pointless.
+        # What it must not buy is every response after it: an ambulance whose
+        # oxygen and defibrillator were never checked is a vehicle nobody has
+        # confirmed can treat the *next* patient, and "we will do it later"
+        # has no later if nothing ever asks. So the debt is called in at the
+        # only safe moment - between patients, with the vehicle empty.
+        if existing is None:
+            outstanding = self._outstanding_skip(shift)
+            if outstanding is not None:
+                return Response(outstanding, status=status.HTTP_409_CONFLICT)
         if existing is not None:
             # An emergency that is already *under way* - patient aboard,
             # hospital assigned, transport running - blocks a second one. Two

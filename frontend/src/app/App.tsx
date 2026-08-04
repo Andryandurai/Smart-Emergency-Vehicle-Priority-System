@@ -9,6 +9,10 @@ import { HospitalsPage as DriverHospitalsPage } from "@/driver/HospitalsPage";
 import { NavigationPage as DriverNavigationPage } from "@/driver/NavigationPage";
 import { ProfilePage as DriverProfilePage } from "@/driver/ProfilePage";
 import { TakeoverPage } from "@/driver/TakeoverPage";
+import { AmbulancesPage as HospitalAmbulancesPage } from "@/hospital/AmbulancesPage";
+import { DashboardPage as HospitalDashboardPage } from "@/hospital/DashboardPage";
+import { HospitalShell } from "@/hospital/HospitalShell";
+import { UpdatesPage as HospitalUpdatesPage } from "@/hospital/UpdatesPage";
 import { BoardsPage } from "@/pages/BoardsPage";
 import { DriverConsolePage } from "@/pages/DriverConsolePage";
 import { DriverPage } from "@/pages/DriverPage";
@@ -89,6 +93,17 @@ export function App() {
             <Route path="navigate" element={<DriverNavigationPage />} />
             <Route path="hospitals" element={<DriverHospitalsPage />} />
             <Route path="profile" element={<DriverProfilePage />} />
+          </Route>
+        </Route>
+
+        {/* The receiving hospital's console: their board, the ambulances
+            bound for them, and their own ward figures. A light wall display
+            rather than a dark control room - see HospitalShell. */}
+        <Route element={<RequireAuth />}>
+          <Route path="/h" element={<HospitalShell />}>
+            <Route index element={<HospitalDashboardPage />} />
+            <Route path="ambulances" element={<HospitalAmbulancesPage />} />
+            <Route path="updates" element={<HospitalUpdatesPage />} />
           </Route>
         </Route>
 

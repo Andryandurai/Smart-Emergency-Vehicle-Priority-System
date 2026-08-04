@@ -23,6 +23,7 @@ import { ChaseCamera, HeadingRotation } from "@/components/driver/NavMap";
 import { SignalStrip, type UpcomingSignal } from "@/components/driver/SignalStrip";
 import { fmtDistance, fmtEta } from "@/components/ui";
 import { useGisLayers } from "@/hooks/useGisLayers";
+import { useJourneyTick } from "@/hooks/useJourneyTick";
 import { useSocket } from "@/hooks/useSocket";
 
 export function NavigationPage() {
@@ -67,6 +68,11 @@ export function NavigationPage() {
       },
     },
   });
+
+  // The same sweep the driver's console runs. Both crew are in one ambulance
+  // and must watch one journey, so both drive it through the server rather
+  // than each interpolating a position of their own.
+  useJourneyTick(shift?.status === "active" && Boolean(trip));
 
   if (!shift || shift.status !== "active") {
     return (
