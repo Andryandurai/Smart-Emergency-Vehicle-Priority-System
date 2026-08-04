@@ -8,9 +8,18 @@
  * four seconds is worse than useless to a charge nurse who was across the room
  * when an ambulance was assigned — they would never know it had happened.
  *
- * So every entry stays, visibly, until someone acts on it. "Acted on" is a
- * real state rather than a dismissal: acknowledging an inbound alert is the
- * hospital saying it has seen the patient coming.
+ * So every entry stays in the Alerts division until somebody removes it by
+ * hand. Two different surfaces, two different lifetimes:
+ *
+ *   the popup   a transient prompt over whichever tab is open. It stands for
+ *               a long time - long enough to cross a busy department and read
+ *               it - and then settles by itself.
+ *   the panel   the permanent record. Settling a popup only clears `fresh`;
+ *               the entry itself leaves only when `remove` is called for it.
+ *
+ * "Acted on" is a real state rather than a dismissal: acknowledging an inbound
+ * alert is the hospital saying it has seen the patient coming, and the row
+ * stays visible afterwards so the shift can still be read back.
  *
  * Lives in a store rather than in the dashboard's local state because the
  * events arrive on a socket the shell holds, and they must survive a tab
@@ -19,7 +28,7 @@
  */
 import { create } from "zustand";
 
-export type NoticeKind = "inbound" | "arrived" | "breakdown" | "received";
+export type NoticeKind = "inbound" | "arrived" | "breakdown" | "received" | "admitted";
 
 export interface HospitalNotice {
   /** Stable across repeats of the same event - see `push`. */
@@ -33,6 +42,15 @@ export interface HospitalNotice {
   acknowledged: boolean;
   /** Raised in this browser session, so it should still pop up. */
   fresh: boolean;
+  /**
+   * Set on a "received" notice: the patient is here and not yet admitted.
+   *
+   * The alert carries the action rather than merely announcing the event,
+   * because admitting is what actually stands the ward's resources down - and
+   * an alert that says "they have arrived" with nothing to press is how a bed
+   * stays advertised as free with a patient already in it.
+   */
+  needsAdmission?: boolean;
 }
 
 interface HospitalNoticeState {
@@ -42,6 +60,17 @@ interface HospitalNoticeState {
   acknowledgeAll: () => void;
   /** Stop the popup without clearing the panel entry. */
   settle: (id: string) => void;
+  /** The patient is in. Clears the outstanding admission action. */
+  markAdmitted: (id: string) => void;
+  /**
+   * Take one alert off the board, and only that one.
+   *
+   * The single way an entry ever leaves the Alerts division. Nothing expires,
+   * nothing is trimmed on a timer, and removing an arrival does not touch the
+   * breakdown logged beside it - the ward decides what has been dealt with,
+   * one row at a time.
+   */
+  remove: (id: string) => void;
   reset: () => void;
 }
 
@@ -92,6 +121,20 @@ export const useHospitalNotices = create<HospitalNoticeState>((set) => ({
     set((state) => ({
       items: state.items.map((item) => (item.id === id ? { ...item, fresh: false } : item)),
     }));
+  },
+
+  markAdmitted(id) {
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.id === id
+          ? { ...item, needsAdmission: false, acknowledged: true, fresh: false }
+          : item,
+      ),
+    }));
+  },
+
+  remove(id) {
+    set((state) => ({ items: state.items.filter((item) => item.id !== id) }));
   },
 
   reset() {

@@ -105,6 +105,12 @@ class EmergencyTrip(TimeStampedModel, UUIDModel):
     departed_scene_at = models.DateTimeField(null=True, blank=True)
     arrived_hospital_at = models.DateTimeField(null=True, blank=True)
     handover_at = models.DateTimeField(null=True, blank=True)
+    #: When the receiving hospital took the patient in and stood its resources
+    #: down. Distinct from `handover_at`: handover is the crew's job ending,
+    #: admission is the ward committing a bed - and only the second one changes
+    #: what the recommender sees. Also the idempotency guard, so a double-tap
+    #: on "Admit patient" cannot decrement the same beds twice.
+    admitted_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.CharField(max_length=200, blank=True)
 

@@ -13,15 +13,18 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: "/", label: "Operations", authOnly: true },
   { to: "/fleet", label: "Fleet", authOnly: true },
+  { to: "/ambulances", label: "Ambulances", authOnly: true },
   { to: "/hospitals", label: "Hospitals", authOnly: true },
-  { to: "/paramedic", label: "Paramedic", authOnly: true },
-  // Two different screens that both concern drivers. "Driver" is the
-  // in-vehicle console at /drive; "Road Alerts" is the public receiver that
-  // has always lived at /driver and warns civilians an ambulance is coming.
-  { to: "/drive", label: "Driver", authOnly: true },
+  // The crew boards: who is on duty, with whom, on what. Distinct from
+  // `/drive`, which is the in-vehicle console itself and stays reachable by
+  // URL for an administrator who wants to see what a crew sees.
+  { to: "/drivers", label: "Drivers", authOnly: true },
+  { to: "/paramedics", label: "Paramedics", authOnly: true },
+  // "Road Alerts" is the public receiver that has always lived at /driver and
+  // warns civilians an ambulance is coming - a different person entirely from
+  // the drivers on the board above.
   { to: "/driver", label: "Road Alerts" },
   { to: "/boards", label: "Boards" },
-  { to: "/analytics", label: "Analytics", authOnly: true },
   { to: "/settings", label: "Settings", authOnly: true },
 ];
 
@@ -56,11 +59,6 @@ export function AppShell() {
               {item.label}
             </NavLink>
           ))}
-          {user?.is_staff && (
-            <a href="/admin/" target="_blank" rel="noopener noreferrer">
-              Admin
-            </a>
-          )}
         </nav>
 
         <div className="whoami">

@@ -33,6 +33,15 @@ interface UseGisLayersResult {
   error: string | null;
   toggle: (name: string) => void;
   isActive: (name: string) => boolean;
+  /**
+   * Re-fetch one layer now.
+   *
+   * For state that changes on an event rather than on a clock. Hospital
+   * capacity is the case that forced this: a ward's beds move the instant a
+   * patient is admitted, and a layer on a fixed poll would leave the control
+   * room's map advertising beds that were committed half a minute ago.
+   */
+  reload: (name: string) => void;
 }
 
 function loadPreference(): Set<string> {
@@ -140,8 +149,13 @@ export function useGisLayers(): UseGisLayersResult {
 
   const isActive = useCallback((name: string) => active.has(name), [active]);
 
+  // No signal: this is fired from a socket handler, not from an effect, so
+  // there is no lifecycle to tie the request to. `fetchLayer` already ignores
+  // a layer the session is not allowed to read.
+  const reload = useCallback((name: string) => void fetchLayer(name), [fetchLayer]);
+
   return useMemo(
-    () => ({ catalogue, basemaps, active, data, loading, error, toggle, isActive }),
-    [catalogue, basemaps, active, data, loading, error, toggle, isActive],
+    () => ({ catalogue, basemaps, active, data, loading, error, toggle, isActive, reload }),
+    [catalogue, basemaps, active, data, loading, error, toggle, isActive, reload],
   );
 }

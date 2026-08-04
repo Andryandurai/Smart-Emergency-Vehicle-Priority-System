@@ -24,6 +24,11 @@ urlpatterns = [
         portal.patient_received,
         name="hospital-portal-received",
     ),
+    path(
+        "portal/trips/<int:trip_id>/admit/",
+        portal.admit_patient,
+        name="hospital-portal-admit",
+    ),
     path("recommend/", views.RecommendHospitalView.as_view(), name="hospital-recommend"),
     path("rule-lookup/<str:category>/", views.RuleLookupView.as_view(), name="hospital-rule-lookup"),
     path("symptoms/", views.SymptomCatalogueView.as_view(), name="hospital-symptoms"),

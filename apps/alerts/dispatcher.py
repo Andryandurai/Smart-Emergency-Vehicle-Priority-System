@@ -257,6 +257,26 @@ def _update_display_boards(trip, plan, progress, horizon_s: float) -> int:
                 "expires_at": board.message_expires_at,
                 "latitude": board.latitude,
                 "longitude": board.longitude,
+                # Which ambulance lit this sign, and how close it is.
+                #
+                # The board wall used to receive the text alone, so a screen
+                # full of "Ambulance Approaching" could not say *which* one, or
+                # whether it was still coming. Sending the vehicle and its
+                # distance is what lets the wall track a journey through the
+                # city rather than just flicker.
+                "vehicle": trip.vehicle.callsign,
+                "trip": trip.reference,
+                "priority_level": trip.priority_level,
+                "eta_seconds": offset,
+                "vehicle_distance_m": round(
+                    haversine_m(
+                        board.latitude,
+                        board.longitude,
+                        trip.vehicle.latitude,
+                        trip.vehicle.longitude,
+                    ),
+                    1,
+                ),
             },
         )
         updated += 1

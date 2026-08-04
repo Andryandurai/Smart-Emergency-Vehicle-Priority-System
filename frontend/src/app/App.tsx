@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from "react";
+import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/app/AppShell";
@@ -13,7 +13,9 @@ import { AmbulancesPage as HospitalAmbulancesPage } from "@/hospital/AmbulancesP
 import { DashboardPage as HospitalDashboardPage } from "@/hospital/DashboardPage";
 import { HospitalShell } from "@/hospital/HospitalShell";
 import { UpdatesPage as HospitalUpdatesPage } from "@/hospital/UpdatesPage";
+import { AmbulancesPage } from "@/pages/AmbulancesPage";
 import { BoardsPage } from "@/pages/BoardsPage";
+import { DriversPage, ParamedicsPage } from "@/pages/CrewBoardPage";
 import { DriverConsolePage } from "@/pages/DriverConsolePage";
 import { DriverPage } from "@/pages/DriverPage";
 import { FleetBoardPage } from "@/pages/FleetBoardPage";
@@ -32,15 +34,6 @@ import { ParamedicShell } from "@/paramedic/ParamedicShell";
 import { ProfilePage as ParamedicProfilePage } from "@/paramedic/ProfilePage";
 import { ShiftPage } from "@/paramedic/ShiftPage";
 import { useAuthStore } from "@/stores/authStore";
-
-/**
- * Analytics is the only screen that needs Recharts (~470 kB). Loading it
- * eagerly would put charting code in front of every operator opening the
- * live map during an incident - the screen where load time actually matters.
- */
-const AnalyticsPage = lazy(() =>
-  import("@/pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })),
-);
 
 export function App() {
   const bootstrap = useAuthStore((state) => state.bootstrap);
@@ -117,6 +110,11 @@ export function App() {
             <Route path="/" element={<OperationsPage />} />
             <Route path="/hospitals" element={<HospitalListPage />} />
             <Route path="/hospital/:code" element={<HospitalPage />} />
+            {/* The crew boards. `/paramedic` keeps the per-vehicle screens it
+                always had; the roster lives at the plural routes so an
+                existing link or bookmark still lands where it used to. */}
+            <Route path="/drivers" element={<DriversPage />} />
+            <Route path="/paramedics" element={<ParamedicsPage />} />
             <Route path="/paramedic" element={<ParamedicSelectPage />} />
             <Route path="/paramedic/:callsign" element={<ParamedicPage />} />
             {/* The ambulance driver's console. Distinct from /driver, which
@@ -124,14 +122,7 @@ export function App() {
                 side of the windscreen. */}
             <Route path="/drive" element={<DriverConsolePage />} />
             <Route path="/fleet" element={<FleetBoardPage />} />
-            <Route
-              path="/analytics"
-              element={
-                <Suspense fallback={<div className="boot-sub">Loading charts…</div>}>
-                  <AnalyticsPage />
-                </Suspense>
-              }
-            />
+            <Route path="/ambulances" element={<AmbulancesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
 

@@ -354,15 +354,53 @@
 .hp-notice.breakdown { border-left-color: var(--hp-bad); }
 /* Kept, not deleted: "what came in this shift" is a question an ED asks. */
 .hp-notice.done { opacity: .55; border-left-color: var(--hp-line); }
-.hp-notice-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.hp-notice-title { font-size: 13px; font-weight: 700; }
+.hp-notice-head { display: flex; align-items: baseline; gap: 8px; }
+.hp-notice-title { flex: 1; font-size: 13px; font-weight: 700; }
 .hp-notice-time { font-size: 10.5px; color: var(--hp-dim); }
+/* Per-alert removal. Deliberately understated until hovered: it is the only
+   destructive control on the board, and a busy thumb must not find it by
+   accident while reaching for Acknowledge. */
+.hp-notice-remove {
+  flex: 0 0 auto; align-self: flex-start;
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; color: var(--hp-dim);
+  font-size: 17px; line-height: 1;
+}
+.hp-notice-remove:hover {
+  background: #fde9e9; border-color: #f3b8b8; color: var(--hp-bad);
+}
+.hp-notice-remove:focus-visible { outline: 2px solid var(--hp-accent); outline-offset: 1px; }
 .hp-notice-body { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--hp-text); }
 .hp-notice-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hp-notice-done { font-size: 11px; font-weight: 700; color: var(--hp-ok); }
 .hp-linkbtn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--hp-accent); font-size: 11.5px; font-weight: 650; text-decoration: none;
+}
+
+/* Admission. The alert carries the action, and the action shows its cost
+   first - a deduction nobody could preview is one nobody trusts, and this
+   feed is what the recommender routes the next patient on. */
+.hp-notice.received { border-left-color: var(--hp-warn); }
+.hp-notice.admitted { border-left-color: var(--hp-ok); }
+.hp-admit { display: flex; flex-direction: column; gap: 8px; }
+.hp-admit-plan {
+  background: #f7f9fb; border: 1px solid var(--hp-line); border-radius: 9px;
+  padding: 9px 11px; display: flex; flex-direction: column; gap: 6px;
+}
+.hp-admit-plan-title {
+  font-size: 10px; font-weight: 800; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--hp-dim);
+}
+.hp-admit-plan ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.hp-admit-plan li { display: flex; flex-direction: column; gap: 1px; }
+.hp-admit-plan li b { font-size: 12.5px; color: var(--hp-bad); }
+.hp-admit-plan li span { font-size: 11px; color: var(--hp-dim); }
+.hp-admit-note { margin: 0; font-size: 11px; color: var(--hp-warn); }
+.hp-admit-short {
+  margin: 0; padding-left: 18px; font-size: 11.5px; color: var(--hp-bad);
+  display: flex; flex-direction: column; gap: 2px;
 }
 
 /* Popups. Above every tab, and they do not fade - the only way one leaves

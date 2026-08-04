@@ -526,3 +526,91 @@ h2 { font-size: 15px; margin: 22px 0 10px; }
 .export-cols { font-size: 9.5px; opacity: 0.45; overflow-wrap: anywhere; }
 
 .small { font-size: 11px; }
+
+/* ===================================================================
+   Crew boards (Drivers, Paramedics) and the Ambulances tab.
+
+   Card-led rather than table-led, unlike the Fleet board next to them.
+   Fleet answers "which vehicles need attention", which a table scanned
+   down one column answers best. These answer "tell me about this
+   person / this ambulance", and the eight or nine fields that takes
+   do not fit in a row anybody can read.
+   =================================================================== */
+
+.crew-summary, .crew-grid, .amb-grid { margin-bottom: 14px; }
+
+.crew-summary {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.crew-stat {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+}
+.crew-stat b { font-size: 24px; font-weight: 800; line-height: 1; }
+.crew-stat span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+.crew-grid, .amb-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.crew-card, .amb-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 4px solid var(--line); border-radius: 12px; overflow: hidden;
+}
+.crew-card.on-duty, .amb-card { border-left-color: #2ecc71; }
+.crew-card.on-call, .amb-card.on-call { border-left-color: #f39c12; }
+.amb-card.grounded { border-left-color: #e74c3c; }
+
+.crew-card-head, .amb-card-head {
+  width: 100%; display: flex; align-items: center; gap: 11px;
+  padding: 12px 14px; cursor: pointer; text-align: left;
+  background: transparent; border: none; color: inherit;
+}
+.crew-avatar {
+  width: 42px; height: 42px; border-radius: 50%; object-fit: cover;
+  border: 2px solid var(--line); flex: 0 0 auto;
+}
+.crew-avatar.fallback {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; color: #05121d;
+  background: linear-gradient(140deg, #4aa3ff, #7b3ff2); border-color: transparent;
+}
+.crew-id, .amb-id { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.crew-name { font-size: 14.5px; font-weight: 650; }
+.crew-flags, .amb-flags { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+
+.crew-assign, .amb-crew {
+  padding: 0 14px 12px; display: grid; gap: 5px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.crew-field, .amb-row {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 0; border-top: 1px solid rgba(255, 255, 255, .05);
+}
+.crew-field span, .amb-row span {
+  font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+}
+.crew-field b, .amb-row b { font-size: 13px; font-weight: 600; }
+.crew-field b.strong { font-size: 15px; font-weight: 800; }
+
+.crew-detail, .amb-detail {
+  border-top: 1px solid var(--line); padding: 12px 14px;
+  display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.crew-detail h4, .amb-detail h4 {
+  margin: 0 0 4px; font-size: 10px; font-weight: 750; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--muted);
+}
+
+.amb-callsign { font-size: 17px; font-weight: 800; letter-spacing: .5px; }
+.amb-plate {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: var(--muted);
+}
+.amb-search {
+  width: 100%; margin-bottom: 12px; padding: 10px 12px; border-radius: 9px;
+  background: var(--panel); border: 1px solid var(--line); color: inherit; font-size: 13.5px;
+}
+.amb-search:focus { outline: none; border-color: #4aa3ff; }

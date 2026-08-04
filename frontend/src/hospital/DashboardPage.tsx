@@ -9,9 +9,12 @@
  * charge nurse checks when the phone rings; team readiness and the ward table
  * are what they check when deciding whether to accept the next case.
  */
+import { useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 
-import type { HospitalDashboard } from "@/api/types";
+import { ApiError } from "@/api/client";
+import { hospitalPortal } from "@/api/endpoints";
+import type { AdmissionPlan, AdmissionResource, HospitalDashboard } from "@/api/types";
 import { fmtTime } from "@/components/ui";
 import type { HospitalOutletContext } from "@/hospital/HospitalShell";
 import { useHospitalNotices } from "@/hospital/notifications";
@@ -170,6 +173,7 @@ function NotificationPanel() {
   const items = useHospitalNotices((state) => state.items);
   const acknowledge = useHospitalNotices((state) => state.acknowledge);
   const acknowledgeAll = useHospitalNotices((state) => state.acknowledgeAll);
+  const remove = useHospitalNotices((state) => state.remove);
   const outstanding = items.filter((item) => !item.acknowledged).length;
 
   return (
@@ -194,7 +198,12 @@ function NotificationPanel() {
       ) : (
         <div className="hp-notices-list">
           {items.map((notice) => (
-            <NoticeRow key={notice.id} notice={notice} onAcknowledge={acknowledge} />
+            <NoticeRow
+              key={notice.id}
+              notice={notice}
+              onAcknowledge={acknowledge}
+              onRemove={remove}
+            />
           ))}
         </div>
       )}
@@ -205,34 +214,170 @@ function NotificationPanel() {
 function NoticeRow({
   notice,
   onAcknowledge,
+  onRemove,
 }: {
   notice: HospitalNotice;
   onAcknowledge: (id: string) => void;
+  onRemove: (id: string) => void;
 }) {
   return (
     <article className={`hp-notice ${notice.kind}${notice.acknowledged ? " done" : ""}`}>
       <div className="hp-notice-head">
         <span className="hp-notice-title">{notice.title}</span>
         <span className="hp-notice-time">{fmtTime(notice.at)}</span>
+        {/* The only thing that takes a row off this board, and it takes
+            exactly one. Nothing here expires on its own. */}
+        <button
+          type="button"
+          className="hp-notice-remove"
+          onClick={() => onRemove(notice.id)}
+          title={`Remove this alert (${notice.title.toLowerCase()})`}
+          aria-label={`Remove alert: ${notice.title}`}
+        >
+          ×
+        </button>
       </div>
       <p className="hp-notice-body">{notice.body}</p>
+
+      {notice.needsAdmission && notice.tripId !== null ? (
+        <AdmitAction notice={notice} />
+      ) : (
+        <div className="hp-notice-actions">
+          <Link className="hp-linkbtn" to="/h/ambulances">
+            View ambulance
+          </Link>
+          {notice.acknowledged ? (
+            <span className="hp-notice-done">✓ Acknowledged</span>
+          ) : (
+            <button
+              type="button"
+              className="hp-btn ghost small"
+              onClick={() => onAcknowledge(notice.id)}
+            >
+              Acknowledge
+            </button>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+/**
+ * Admit the patient, and show what it will cost before it does.
+ *
+ * The plan is fetched and displayed rather than applied blind. A ward that
+ * cannot see which beds are about to disappear will stop trusting the figures,
+ * and these figures are what the recommender routes the next patient on - so
+ * the preview is what keeps the whole loop honest.
+ */
+function AdmitAction({ notice }: { notice: HospitalNotice }) {
+  const { code, refreshBoard } = useOutletContext<HospitalOutletContext>();
+  const markAdmitted = useHospitalNotices((state) => state.markAdmitted);
+  const [plan, setPlan] = useState<AdmissionPlan | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [shortfalls, setShortfalls] = useState<AdmissionResource[]>([]);
+
+  const tripId = notice.tripId as number;
+
+  const preview = async () => {
+    setOpen(true);
+    setError(null);
+    try {
+      setPlan((await hospitalPortal.admissionPlan(tripId)).plan);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not work out what this patient needs.");
+    }
+  };
+
+  const admit = async () => {
+    setBusy(true);
+    setError(null);
+    setShortfalls([]);
+    try {
+      await hospitalPortal.admit(tripId, code ?? undefined);
+      markAdmitted(notice.id);
+      // The board, the Updates tab and the control room all read the same
+      // capacity row, so one refresh here plus the broadcast the server sends
+      // is what makes the figures move everywhere at once.
+      await refreshBoard();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const payload = err.payload as { detail?: string; shortfalls?: AdmissionResource[] };
+        setShortfalls(payload?.shortfalls ?? []);
+        setError(payload?.detail ?? "This ward cannot cover the admission.");
+      } else {
+        setError(err instanceof Error ? err.message : "Could not admit the patient.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="hp-admit">
+      {error && <div className="hp-warn small">{error}</div>}
+
+      {shortfalls.length > 0 && (
+        <ul className="hp-admit-short">
+          {shortfalls.map((item) => (
+            <li key={item.field}>
+              {item.label}: need {item.units}, {item.available} free
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {open && plan && (
+        <div className="hp-admit-plan">
+          <span className="hp-admit-plan-title">This admission will occupy</span>
+          <ul>
+            {plan.resources.map((item) => (
+              <li key={item.field}>
+                <b>
+                  {item.label} −{item.units}
+                </b>
+                <span>{item.reason}</span>
+              </li>
+            ))}
+          </ul>
+          {plan.notes.map((note) => (
+            <p key={note} className="hp-admit-note">
+              {note}
+            </p>
+          ))}
+        </div>
+      )}
+
       <div className="hp-notice-actions">
-        <Link className="hp-linkbtn" to="/h/ambulances">
-          View ambulance
-        </Link>
-        {notice.acknowledged ? (
-          <span className="hp-notice-done">✓ Acknowledged</span>
-        ) : (
-          <button
-            type="button"
-            className="hp-btn ghost small"
-            onClick={() => onAcknowledge(notice.id)}
-          >
-            Acknowledge
+        {!open ? (
+          <button type="button" className="hp-btn primary small" onClick={() => void preview()}>
+            Admit patient
           </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="hp-btn primary small"
+              disabled={busy || !plan}
+              onClick={() => void admit()}
+            >
+              {busy ? "Admitting…" : "Confirm admission"}
+            </button>
+            <button
+              type="button"
+              className="hp-btn ghost small"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
+              Not yet
+            </button>
+          </>
         )}
       </div>
-    </article>
+    </div>
   );
 }
 

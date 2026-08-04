@@ -405,6 +405,81 @@ export interface HospitalUpdateForm {
   dashboard?: HospitalDashboard;
 }
 
+/** One resource an admission will occupy. See apps/hospitals/admission.py. */
+export interface AdmissionResource {
+  field: string;
+  label: string;
+  units: number;
+  reason: string;
+  /** Present only on the applied result. */
+  before?: number;
+  after?: number;
+  /** Present only on a shortfall. */
+  available?: number;
+}
+
+export interface AdmissionPlan {
+  resources: AdmissionResource[];
+  notes: string[];
+}
+
+export interface AdmissionResult {
+  trip: string;
+  applied: AdmissionResource[];
+  notes: string[];
+  dashboard: HospitalDashboard;
+}
+
+/**
+ * The crew board behind the admin's Drivers and Paramedics tabs.
+ *
+ * One shape for both seats: the pairing is a property of the shift, so two
+ * separate payloads would be two chances to disagree about who is crewing with
+ * whom.
+ */
+export interface CrewMember {
+  id: number;
+  username: string;
+  name: string;
+  email: string;
+  staff_id: string;
+  qualification: string;
+  base_station: string;
+  phone: string;
+  blood_group: string;
+  avatar_url: string | null;
+  on_duty: boolean;
+  shift_status: string;
+  vehicle: string | null;
+  vehicle_registration: string;
+  partner: string | null;
+  on_duty_since: string | null;
+  mission: string | null;
+  mission_category: string | null;
+  mission_stage: string | null;
+  mission_hospital: string | null;
+  mission_eta: string | null;
+  mission_priority: PriorityLevel | null;
+  status: string;
+  monitoring: {
+    latitude: number | null;
+    longitude: number | null;
+    speed_kmh: number | null;
+    heading_deg: number | null;
+    last_seen_at: string | null;
+    is_stale: boolean | null;
+    vehicle_readiness: string | null;
+    inspection: string | null;
+    distance_remaining_m: number | null;
+  };
+}
+
+export interface CrewRoster {
+  generated_at: string;
+  drivers: CrewMember[];
+  paramedics: CrewMember[];
+}
+
 export interface HospitalChoice {
   id: number;
   code: string;

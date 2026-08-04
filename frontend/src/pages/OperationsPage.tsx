@@ -167,6 +167,43 @@ export function OperationsPage() {
         store.addLog(`signal ${(data as { controller_id: string }).controller_id} released`);
         void store.refreshPreemptions();
       },
+      /**
+       * A hospital's figures moved.
+       *
+       * Raised by the ward's own Updates tab and, more importantly, by an
+       * admission - which decrements beds without anybody typing a number. The
+       * control room's hospital panel reads the same capacity rows the
+       * recommender does, so it has to hear about both or it will show beds
+       * that were committed to a patient minutes ago.
+       */
+      hospital_capacity: (data) => {
+        const event = data as { hospital: string; status?: string };
+        store.addLog(
+          `${event.hospital}: capacity updated${event.status ? ` — ${event.status}` : ""}`,
+        );
+        gis.reload("hospitals");
+      },
+      patient_admitted: (data) => {
+        const event = data as {
+          hospital: string;
+          trip: string;
+          applied: { label: string; units: number }[];
+        };
+        store.addLog(
+          `${event.hospital}: admitted ${event.trip} — ` +
+            `${(event.applied ?? []).map((item) => `${item.label} −${item.units}`).join(", ")}`,
+          "warn",
+        );
+        gis.reload("hospitals");
+      },
+      patient_received: (data) => {
+        const event = data as { reference?: string; hospital_code?: string };
+        store.addLog(
+          `${event.reference ?? "patient"}: received at ${event.hospital_code ?? "hospital"}`,
+          "ok",
+        );
+        void store.refreshTrips();
+      },
       driver_alerts: (data) => store.pushAlerts((data as { alerts: DriverAlert[] }).alerts ?? []),
       eta_update: (data) => {
         const update = data as EtaUpdate;

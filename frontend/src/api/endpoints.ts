@@ -7,8 +7,11 @@
  */
 import { ApiError, api, getAccessToken } from "./client";
 import type {
+  AdmissionPlan,
+  AdmissionResult,
   AnalyticsSummary,
   Breakdown,
+  CrewRoster,
   CategoryDistribution,
   CorridorOutcomes,
   CrewPerson,
@@ -206,6 +209,15 @@ export const shifts = {
       `/api/v1/fleet/shifts/${shiftId}/checklist/skip/`,
       { reason },
     ),
+
+  /**
+   * Every driver and paramedic, with the shift and job they are on.
+   *
+   * Backs the admin console's Drivers and Paramedics tabs. One call for both
+   * seats so the two screens cannot disagree about a pairing.
+   */
+  roster: (signal?: AbortSignal) =>
+    api.get<CrewRoster>("/api/v1/fleet/shifts/roster/", signal),
 
   /** Ambulances this driver may take over: available, uncrewed, not grounded. */
   selectableVehicles: (signal?: AbortSignal) =>
@@ -484,7 +496,21 @@ export const hospitalPortal = {
 
   /** The receiving team's half of the handover. */
   patientReceived: (tripId: number, code?: string) =>
-    api.post<Trip>(`/api/v1/hospitals/portal/trips/${tripId}/received/`, {
+    api.post<Trip & { admission_plan: AdmissionPlan }>(
+      `/api/v1/hospitals/portal/trips/${tripId}/received/`,
+      { ...(code ? { hospital: code } : {}) },
+    ),
+
+  /** What admitting this patient would occupy. Reads only. */
+  admissionPlan: (tripId: number, signal?: AbortSignal) =>
+    api.get<{ trip: string; plan: AdmissionPlan }>(
+      `/api/v1/hospitals/portal/trips/${tripId}/admit/`,
+      signal,
+    ),
+
+  /** Take the patient in, and stand the resources down. */
+  admit: (tripId: number, code?: string) =>
+    api.post<AdmissionResult>(`/api/v1/hospitals/portal/trips/${tripId}/admit/`, {
       ...(code ? { hospital: code } : {}),
     }),
 };

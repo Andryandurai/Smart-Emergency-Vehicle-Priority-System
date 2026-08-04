@@ -27,6 +27,7 @@ from apps.core.enums import BreakdownState, TripStage, VehicleStatus
 from apps.core.permissions import IsAuthenticatedRole, IsHospitalStaff
 from apps.core.realtime import broadcast, broadcast_ops, hospital_group
 from apps.core.roles import Role, has_role
+from apps.hospitals.admission import plan_for_trip
 from apps.hospitals.models import Hospital, HospitalCapacity, HospitalTeamReadiness
 
 #: Stages that mean "on the way here". ARRIVED is included deliberately: the
@@ -403,10 +404,92 @@ def patient_received(request, trip_id: int):
         capacity.save(update_fields=["emergency_cases_today", "updated_at"])
 
     payload = EmergencyTripSerializer(trip, context={"request": request}).data
-    broadcast_ops("patient_received", payload)
+    # What admitting this patient would cost, sent with the receipt so the
+    # portal can offer "Admit patient" with the deduction already visible
+    # rather than as a button whose consequences appear afterwards.
+    admission_plan = plan_for_trip(trip)
+    event = {
+        **payload,
+        "admission_plan": admission_plan,
+        "hospital_code": trip.destination_hospital.code if trip.destination_hospital_id else None,
+    }
+    broadcast_ops("patient_received", event)
     if trip.destination_hospital_id:
-        broadcast(hospital_group(trip.destination_hospital.code), "patient_received", payload)
-    return Response(payload)
+        broadcast(hospital_group(trip.destination_hospital.code), "patient_received", event)
+    return Response(event)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsHospitalStaff])
+def admit_patient(request, trip_id: int):
+    """Take the patient in, and stand the resources down.
+
+    GET previews the plan; POST applies it. Split so the ward sees exactly what
+    is about to be deducted before anything moves - a capacity change nobody
+    could preview is a capacity change nobody trusts, and this feed is what the
+    recommender routes the *next* patient on.
+    """
+    from apps.dispatch.models import EmergencyTrip
+    from apps.hospitals.admission import InsufficientCapacity, admit
+
+    trip = EmergencyTrip.objects.filter(pk=trip_id).select_related(
+        "vehicle", "destination_hospital"
+    ).first()
+    if trip is None:
+        return Response({"detail": "Unknown trip."}, status=status.HTTP_404_NOT_FOUND)
+
+    hospital = resolve_hospital(request, request.data.get("hospital") if request.method == "POST" else None)
+    if hospital is None:
+        return Response({"detail": "No active hospital."}, status=status.HTTP_404_NOT_FOUND)
+    if trip.destination_hospital_id != hospital.id:
+        return Response(
+            {"detail": "That patient was not brought to this hospital."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == "GET":
+        return Response({"trip": trip.reference, "plan": plan_for_trip(trip)})
+
+    if trip.admitted_at is not None:
+        return Response(
+            {"detail": f"{trip.reference} has already been admitted."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    who = request.user.get_username() if request.user.is_authenticated else "hospital"
+    try:
+        result = admit(trip, hospital, actor=who)
+    except InsufficientCapacity as exc:
+        return Response(
+            {
+                "detail": (
+                    "This ward does not have the resources this patient needs. "
+                    "Update the figures, or admit them elsewhere."
+                ),
+                "shortfalls": exc.shortfalls,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    trip.admitted_at = timezone.now()
+    trip.save(update_fields=["admitted_at", "updated_at"])
+
+    # Capacity has moved, so every surface showing it has to hear: the ward's
+    # own board, the control room, and - through `hospital_capacity` on the ops
+    # channel - the admin console's hospital panel and fleet screens.
+    board = dashboard_payload(hospital)
+    broadcast(hospital_group(hospital.code), "capacity_updated", board)
+    broadcast(hospital_group(hospital.code), "patient_admitted", {
+        "trip": trip.reference, "applied": result["applied"],
+    })
+    broadcast_ops("hospital_capacity", {"hospital": hospital.code, **board})
+    broadcast_ops("patient_admitted", {
+        "hospital": hospital.code,
+        "trip": trip.reference,
+        "applied": result["applied"],
+    })
+
+    return Response({"trip": trip.reference, **result, "dashboard": board})
 
 
 @api_view(["GET", "PATCH"])

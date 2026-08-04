@@ -203,6 +203,129 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
             }
         )
 
+    @action(
+        detail=False, methods=["get"], url_path="roster",
+        permission_classes=[IsAuthenticatedRole],
+    )
+    def roster(self, request):
+        """Every driver and paramedic, with whatever they are currently doing.
+
+        The control room's crew board. Assembled from the shift rather than
+        from the account, because "who is crewing AMB-104 right now" is a
+        property of the shift and nothing else - an account tells you a person
+        exists, not that they are on the road with somebody.
+
+        One endpoint for both seats so the two admin tabs cannot drift into
+        showing different versions of the same pairing.
+        """
+        from apps.core.profiles import StaffProfile
+        from apps.core.roles import group_names_for
+
+        drivers = User.objects.filter(
+            groups__name__in=group_names_for(Role.AMBULANCE), is_active=True
+        ).distinct()
+        paramedics = User.objects.filter(
+            groups__name__in=group_names_for(Role.PARAMEDIC), is_active=True
+        ).distinct()
+
+        live = {
+            shift.driver_id: shift
+            for shift in CrewShift.objects.open().select_related(
+                "vehicle", "driver", "paramedic", "equipment_check"
+            )
+        }
+        by_paramedic = {
+            shift.paramedic_id: shift
+            for shift in CrewShift.objects.open().select_related(
+                "vehicle", "driver", "paramedic", "equipment_check"
+            )
+            if shift.paramedic_id
+        }
+        profiles = {p.user_id: p for p in StaffProfile.objects.all()}
+
+        return Response(
+            {
+                "generated_at": timezone.now(),
+                "drivers": [
+                    self._crew_row(user, live.get(user.id), "driver", profiles, request)
+                    for user in drivers.order_by("first_name", "username")
+                ],
+                "paramedics": [
+                    self._crew_row(user, by_paramedic.get(user.id), "paramedic", profiles, request)
+                    for user in paramedics.order_by("first_name", "username")
+                ],
+            }
+        )
+
+    @staticmethod
+    def _crew_row(user, shift, seat: str, profiles: dict, request) -> dict:
+        """One person, their pairing, and the job they are on."""
+        profile = profiles.get(user.id)
+        vehicle = shift.vehicle if shift else None
+        trip = vehicle.active_trip if vehicle else None
+        partner = None
+        if shift:
+            partner = shift.paramedic if seat == "driver" else shift.driver
+
+        check = getattr(shift, "equipment_check", None) if shift else None
+
+        return {
+            "id": user.id,
+            "username": user.get_username(),
+            "name": user.get_full_name() or user.get_username(),
+            "email": user.email,
+            "staff_id": profile.staff_id if profile else "",
+            "qualification": profile.qualification if profile else "",
+            "base_station": profile.base_station if profile else "",
+            "phone": profile.phone if profile else "",
+            "blood_group": profile.blood_group if profile else "",
+            "avatar_url": (
+                request.build_absolute_uri(profile.avatar.url)
+                if profile and profile.avatar
+                else None
+            ),
+            # --- assignment ---
+            "on_duty": bool(shift and shift.status == ShiftStatus.ACTIVE),
+            "shift_status": shift.get_status_display() if shift else "Off duty",
+            "vehicle": vehicle.callsign if vehicle else None,
+            "vehicle_registration": vehicle.registration if vehicle else "",
+            "partner": (partner.get_full_name() or partner.get_username()) if partner else None,
+            "on_duty_since": shift.accepted_at if shift else None,
+            # --- the job ---
+            "mission": trip.reference if trip else None,
+            "mission_category": trip.get_emergency_category_display() if trip else None,
+            "mission_stage": trip.get_stage_display() if trip else None,
+            "mission_hospital": (
+                trip.destination_hospital.name
+                if trip and trip.destination_hospital_id
+                else None
+            ),
+            "mission_eta": trip.eta if trip else None,
+            "mission_priority": trip.priority_level if trip else None,
+            # --- live monitoring ---
+            "status": (
+                trip.get_stage_display() if trip
+                else vehicle.get_status_display() if vehicle
+                else "Off duty"
+            ),
+            "monitoring": {
+                "latitude": vehicle.latitude if vehicle else None,
+                "longitude": vehicle.longitude if vehicle else None,
+                "speed_kmh": vehicle.speed_kmh if vehicle else None,
+                "heading_deg": vehicle.heading_deg if vehicle else None,
+                "last_seen_at": vehicle.last_seen_at if vehicle else None,
+                "is_stale": vehicle.is_stale if vehicle else None,
+                "vehicle_readiness": vehicle.get_readiness_display() if vehicle else None,
+                "inspection": (
+                    "Complete" if check and check.is_complete
+                    else "Skipped - outstanding" if check and check.skipped
+                    else "Outstanding" if check
+                    else None
+                ),
+                "distance_remaining_m": trip.distance_remaining_m if trip else None,
+            },
+        }
+
     @action(detail=False, methods=["get"], url_path="mine")
     def mine(self, request):
         """The signed-in user's open shift, plus takeovers awaiting them.
