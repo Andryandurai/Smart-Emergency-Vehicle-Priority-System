@@ -337,6 +337,8 @@ export interface InboundPatient {
 }
 
 export interface InboundAmbulance {
+  /** Journey completion, for the board's progress bar. */
+  progress: { percent: number; total_m: number | null; is_moving: boolean };
   trip_id: number;
   reference: string;
   ambulance_number: string;
@@ -734,6 +736,9 @@ export interface DemoAccount {
   role_labels: string[];
   is_paramedic: boolean;
   is_driver: boolean;
+  is_hospital: boolean;
+  /** The ward a hospital login opens. Blank for every other role. */
+  hospital: string;
   staff_id: string;
   qualification: string;
   base_station: string;

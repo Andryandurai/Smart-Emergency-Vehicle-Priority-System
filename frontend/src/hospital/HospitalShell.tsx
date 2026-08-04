@@ -12,14 +12,22 @@
  * horizontal tab strip under a status header. None of them can be mistaken for
  * another, which is what keeps them from collapsing back into one another.
  *
- * Behind it is the existing Layer 5 backend - the same trips, corridor ETAs
- * and capacity rows the recommender reads.
+ * The shell owns the hospital socket. Alerts have to arrive whichever tab is
+ * open - an ambulance assigned while somebody is editing bed counts is exactly
+ * the one that must not be missed - so the connection and the popups live
+ * here, above the tabs, and the persistent panel is rendered by the dashboard.
+ *
+ * Behind it is the existing Layer 5 backend: the same trips, corridor ETAs and
+ * capacity rows the recommender reads.
  */
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { hospitalPortal } from "@/api/endpoints";
-import type { HospitalChoice, HospitalDashboard } from "@/api/types";
+import type { HospitalDashboard } from "@/api/types";
+import { useHospitalNotices } from "@/hospital/notifications";
+import type { HospitalNotice } from "@/hospital/notifications";
+import { useSocket } from "@/hooks/useSocket";
 import { useAuthStore } from "@/stores/authStore";
 
 const TABS = [
@@ -28,52 +36,40 @@ const TABS = [
   { to: "/h/updates", label: "Updates" },
 ];
 
-/** Where the chosen ward is remembered between visits. */
-const STORAGE_KEY = "sevps.hospital.code";
-
 export function HospitalShell() {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [choices, setChoices] = useState<HospitalChoice[]>([]);
-  const [bound, setBound] = useState(false);
-  const [code, setCode] = useState<string | null>(
-    () => window.localStorage.getItem(STORAGE_KEY),
-  );
+  const [code, setCode] = useState<string | null>(null);
   const [board, setBoard] = useState<HospitalDashboard | null>(null);
 
+  const push = useHospitalNotices((state) => state.push);
+  const notices = useHospitalNotices((state) => state.items);
+  const resetNotices = useHospitalNotices((state) => state.reset);
+
+  /**
+   * Which ward this account opens.
+   *
+   * Asked for rather than chosen. Each hospital login is bound to one ward
+   * through `Hospital.staff_group`, so the server returns exactly one row and
+   * there is nothing to pick - the header used to carry a dropdown, which let
+   * a charge nurse change whose beds they were editing by brushing a control.
+   */
   useEffect(() => {
     hospitalPortal
       .choices()
-      .then((result) => {
-        setChoices(result.hospitals);
-        setBound(result.bound);
-        // A bound account has exactly one ward and no say in the matter, so a
-        // code left in storage by an earlier session must not override it.
-        if (result.bound && result.hospitals[0]) {
-          setCode(result.hospitals[0].code);
-        } else if (!code && result.hospitals[0]) {
-          setCode(result.hospitals[0].code);
-        }
-      })
-      .catch(() => setChoices([]));
-    // Runs once: the roster of wards this account may open does not change
-    // while the board is up.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .then((result) => setCode(result.hospitals[0]?.code ?? null))
+      .catch(() => setCode(null));
   }, []);
-
-  useEffect(() => {
-    if (code) window.localStorage.setItem(STORAGE_KEY, code);
-  }, [code]);
 
   /**
    * The header's status pill.
    *
-   * Polled here rather than in the Dashboard tab so the pill stays true while
-   * the Ambulances or Updates tab is open - the whole point of a header status
-   * is that it does not depend on which screen somebody left up.
+   * Polled here rather than in the Dashboard tab so it stays true while the
+   * Ambulances or Updates tab is open - the whole point of a header status is
+   * that it does not depend on which screen somebody left up.
    */
   const refreshBoard = useCallback(async () => {
     if (!code) return;
@@ -90,6 +86,88 @@ export function HospitalShell() {
     return () => window.clearInterval(timer);
   }, [refreshBoard]);
 
+  // --- alerts -------------------------------------------------------------
+  //
+  // All four already exist on the hospital channel; nothing new is published
+  // for the portal's benefit. `hospital_alert` is raised the moment a crew
+  // commit to a destination - which is precisely "a driver and paramedic have
+  // chosen this hospital and navigation has begun".
+  const { status: socket } = useSocket(code ? `/ws/hospital/${code}/` : "", {
+    handlers: {
+      hospital_alert: (data) => {
+        const alert = data as {
+          trip: number;
+          vehicle_callsign: string;
+          category_display: string;
+          priority_level: number;
+          eta: string | null;
+        };
+        push({
+          id: `inbound:${alert.trip}`,
+          kind: "inbound",
+          title: "Ambulance inbound",
+          body:
+            `${alert.vehicle_callsign} is on the way with a ` +
+            `${(alert.category_display ?? "emergency").toLowerCase()} patient ` +
+            `(Level ${alert.priority_level}).`,
+          tripId: alert.trip,
+          callsign: alert.vehicle_callsign ?? "",
+          at: new Date().toISOString(),
+        });
+        void refreshBoard();
+      },
+
+      trip_stage: (data) => {
+        const event = data as {
+          id?: number;
+          trip_id?: number;
+          stage: string;
+          vehicle?: string;
+          vehicle_callsign?: string;
+        };
+        const tripId = event.trip_id ?? event.id ?? null;
+        const callsign = event.vehicle_callsign ?? event.vehicle ?? "";
+        if (event.stage === "arrived") {
+          push({
+            id: `arrived:${tripId}`,
+            kind: "arrived",
+            title: "Ambulance arrived",
+            body: `${callsign || "An ambulance"} has arrived. Confirm once the patient is with your team.`,
+            tripId,
+            callsign,
+            at: new Date().toISOString(),
+          });
+        }
+        void refreshBoard();
+      },
+
+      // A new destination, an ETA revision or a re-plan. No alert - it is not
+      // news, it is the same patient - but the board's counts change.
+      inbound_update: () => void refreshBoard(),
+
+      ambulance_breakdown: (data) => {
+        const event = data as { vehicle?: string; trip_id?: number };
+        push({
+          id: `breakdown:${event.trip_id ?? event.vehicle ?? "unknown"}`,
+          kind: "breakdown",
+          title: "Ambulance breakdown",
+          body: `${event.vehicle ?? "An ambulance"} bound for you has broken down. A replacement is being sought.`,
+          tripId: event.trip_id ?? null,
+          callsign: event.vehicle ?? "",
+          at: new Date().toISOString(),
+        });
+        void refreshBoard();
+      },
+
+      patient_received: () => void refreshBoard(),
+    },
+  });
+
+  // A different hospital's board must never inherit this one's alerts.
+  useEffect(() => {
+    resetNotices();
+  }, [code, resetNotices]);
+
   const signOut = async (): Promise<void> => {
     await logout();
     navigate("/login", { replace: true });
@@ -98,6 +176,8 @@ export function HospitalShell() {
   const here = TABS.find((tab) =>
     tab.to === "/h" ? location.pathname === "/h" : location.pathname.startsWith(tab.to),
   );
+
+  const popups = notices.filter((notice) => notice.fresh && !notice.acknowledged).slice(0, 3);
 
   return (
     <div className="hp-root">
@@ -122,25 +202,7 @@ export function HospitalShell() {
               {board.status}
             </span>
           )}
-
-          {/* Only where the deployment has not bound this account to one ward.
-              With a binding the server ignores the request anyway, so offering
-              the choice would be a control that does nothing. */}
-          {!bound && choices.length > 1 && (
-            <select
-              className="hp-picker"
-              aria-label="Hospital"
-              value={code ?? ""}
-              onChange={(event) => setCode(event.target.value)}
-            >
-              {choices.map((choice) => (
-                <option key={choice.code} value={choice.code}>
-                  {choice.name}
-                </option>
-              ))}
-            </select>
-          )}
-
+          <span className={`hp-link ${socket}`} title={`Live link: ${socket}`} aria-hidden />
           <span className="hp-user">{user?.username}</span>
           <button type="button" className="hp-signout" onClick={() => void signOut()}>
             Sign out
@@ -168,6 +230,53 @@ export function HospitalShell() {
       <main className="hp-main">
         <Outlet context={{ code, board, refreshBoard }} />
       </main>
+
+      {/* Popups sit above every tab. They do not fade: the only way one leaves
+          is somebody acknowledging it, or opening the ambulance it refers to. */}
+      {popups.length > 0 && (
+        <div className="hp-popups" role="alert" aria-live="assertive">
+          {popups.map((notice) => (
+            <Popup key={notice.id} notice={notice} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Popup({ notice }: { notice: HospitalNotice }) {
+  const acknowledge = useHospitalNotices((state) => state.acknowledge);
+  const settle = useHospitalNotices((state) => state.settle);
+  const navigate = useNavigate();
+
+  return (
+    <div className={`hp-popup ${notice.kind}`}>
+      <div className="hp-popup-head">
+        <span className="hp-popup-tag">{notice.title}</span>
+        {notice.callsign && <span className="hp-popup-call">{notice.callsign}</span>}
+      </div>
+      <p>{notice.body}</p>
+      <div className="hp-popup-actions">
+        <button
+          type="button"
+          className="hp-btn primary small"
+          onClick={() => {
+            // Opening the ambulance list is itself a response, so the popup
+            // goes - but the entry stays in the panel until acknowledged.
+            settle(notice.id);
+            navigate("/h/ambulances");
+          }}
+        >
+          View ambulance
+        </button>
+        <button
+          type="button"
+          className="hp-btn ghost small"
+          onClick={() => acknowledge(notice.id)}
+        >
+          Acknowledge
+        </button>
+      </div>
     </div>
   );
 }

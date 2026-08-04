@@ -20,10 +20,14 @@ import { ApiError } from "@/api/client";
 import { hospitalPortal } from "@/api/endpoints";
 import type { Breakdown, InboundAmbulance } from "@/api/types";
 import { MapCanvas, ROUTE_BLUE, RouteLine, hospitalIcon, vehicleIcon } from "@/components/MapCanvas";
+
+/** A completed run, drawn behind the live ones. */
+const ARRIVED_GREEN = "#128a52";
 import { fmtDistance, fmtEta } from "@/components/ui";
 import type { HospitalOutletContext } from "@/hospital/HospitalShell";
 import { useJourneyTick } from "@/hooks/useJourneyTick";
 import { usePolling } from "@/hooks/usePolling";
+import { useSocket } from "@/hooks/useSocket";
 
 export function AmbulancesPage() {
   const { code, board, refreshBoard } = useOutletContext<HospitalOutletContext>();
@@ -61,6 +65,26 @@ export function AmbulancesPage() {
   // the last few kilometres, and a stale ETA here is the difference between a
   // team standing ready and a team being called.
   usePolling((signal) => refresh(signal), 2000);
+
+  /**
+   * And the socket on top, for the events that must not wait for a poll.
+   *
+   * A crew committing to this hospital raises `hospital_alert` immediately;
+   * without this the new row could sit two seconds behind the popup that
+   * announced it, which reads as the board being broken. `vehicle_position`
+   * is the one that makes the markers move between polls.
+   */
+  useSocket(code ? `/ws/hospital/${code}/` : "", {
+    handlers: {
+      hospital_alert: () => void refresh(),
+      trip_stage: () => void refresh(),
+      inbound_update: () => void refresh(),
+      eta_update: () => void refresh(),
+      vehicle_position: () => void refresh(),
+      patient_received: () => void refresh(),
+      ambulance_breakdown: () => void refresh(),
+    },
+  });
 
   // Keep the ambulances actually moving while this board is the only screen
   // open. The hospital is often the one display left up overnight.
@@ -117,6 +141,52 @@ export function AmbulancesPage() {
         </div>
       )}
 
+      {/* One map for the whole board, above the list. Without it the only way
+          to see that an ambulance was moving was to expand its row - so from
+          the list every vehicle looked parked where it had started. */}
+      {rows.length > 0 && board && (
+        <section className="hp-overview">
+          <MapCanvas
+            centre={[board.hospital.latitude, board.hospital.longitude]}
+            zoom={12}
+            className="map hp-overview-map"
+          >
+            {rows.map((row) => (
+              <RouteLine
+                key={`route-${row.trip_id}`}
+                geometry={row.route_geometry}
+                colour={row.has_arrived ? ARRIVED_GREEN : ROUTE_BLUE}
+              />
+            ))}
+            {rows.map((row) => (
+              <Marker
+                key={`veh-${row.trip_id}`}
+                position={[row.current_location.latitude, row.current_location.longitude]}
+                icon={vehicleIcon(row.emergency_level, "ambulance", {
+                  heading: row.current_location.heading_deg,
+                  focused: !row.has_arrived,
+                })}
+                zIndexOffset={3000}
+                eventHandlers={{
+                  click: () => setOpenTrip(openTrip === row.trip_id ? null : row.trip_id),
+                }}
+              />
+            ))}
+            <Marker
+              position={[board.hospital.latitude, board.hospital.longitude]}
+              icon={hospitalIcon({ isTrauma: board.hospital.is_trauma_designated })}
+              zIndexOffset={2000}
+            />
+            <FitAll rows={rows} hospital={[board.hospital.latitude, board.hospital.longitude]} />
+          </MapCanvas>
+          <div className="hp-overview-key">
+            <span><i className="k moving" />Inbound</span>
+            <span><i className="k arrived" />Arrived</span>
+            <span><i className="k hosp" />{board.hospital.name}</span>
+          </div>
+        </section>
+      )}
+
       <div className="hp-amb-list">
         {rows.map((row, index) => (
           <article
@@ -147,15 +217,49 @@ export function AmbulancesPage() {
 
               <span className="hp-amb-eta">
                 <b>{row.has_arrived ? "Arrived" : fmtEta(row.eta)}</b>
-                <span className="hp-dim">{fmtDistance(row.distance_remaining_m)} away</span>
+                <span className="hp-dim">
+                  {row.has_arrived ? "At the door" : `${fmtDistance(row.distance_remaining_m)} away`}
+                </span>
               </span>
 
               <span className="hp-amb-flags">
                 <span className={`hp-level l${row.emergency_level}`}>L{row.emergency_level}</span>
                 <span className="hp-category">{row.patient_category}</span>
-                <span className="hp-dim">{row.current_status}</span>
+                {/* The state, said plainly. A row that only carried a stage
+                    name read as static however far the vehicle had come. */}
+                {row.has_arrived ? (
+                  <span className="hp-state arrived">At hospital</span>
+                ) : row.progress.is_moving ? (
+                  <span className="hp-state moving">
+                    <i aria-hidden /> {Math.round(row.current_location.speed_kmh)} km/h
+                  </span>
+                ) : (
+                  <span className="hp-state held">{row.current_status}</span>
+                )}
               </span>
             </button>
+
+            {/* Progress along the road to us. The bar is the only thing on the
+                collapsed row that changes second to second, which is what
+                makes an inbound ambulance read as inbound. */}
+            <div className={`hp-progress${row.has_arrived ? " arrived" : ""}`}>
+              <span className="hp-progress-track">
+                <span
+                  className="hp-progress-fill"
+                  style={{ width: `${row.has_arrived ? 100 : row.progress.percent}%` }}
+                />
+                <span
+                  className="hp-progress-pip"
+                  style={{ left: `${row.has_arrived ? 100 : row.progress.percent}%` }}
+                  aria-hidden
+                />
+              </span>
+              <span className="hp-progress-label">
+                {row.has_arrived
+                  ? "Arrived at hospital"
+                  : `${row.progress.percent}% of the way here`}
+              </span>
+            </div>
 
             {openTrip === row.trip_id && (
               <div className="hp-amb-detail">
@@ -306,6 +410,43 @@ function AmbulanceMap({ row }: { row: InboundAmbulance }) {
       <FitRoute geometry={row.route_geometry} position={position} />
     </MapCanvas>
   );
+}
+
+/**
+ * Frame every inbound journey, and the hospital.
+ *
+ * Refitted only when the *set* of ambulances changes, not on every position
+ * update: a board that re-zoomed each time a vehicle moved would never sit
+ * still long enough to read.
+ */
+function FitAll({
+  rows,
+  hospital,
+}: {
+  rows: InboundAmbulance[];
+  hospital: [number, number];
+}) {
+  const map = useMap();
+  const fittedFor = useRef<string>("");
+
+  useEffect(() => {
+    const key = rows.map((row) => row.trip_id).sort().join(",");
+    if (fittedFor.current === key) return;
+    fittedFor.current = key;
+
+    const points: [number, number][] = [hospital];
+    for (const row of rows) {
+      points.push([row.current_location.latitude, row.current_location.longitude]);
+      if (row.route_geometry.length) points.push(...row.route_geometry);
+    }
+    if (points.length < 2) {
+      map.setView(hospital, 13);
+      return;
+    }
+    map.fitBounds(points, { padding: [34, 34], animate: false });
+  }, [map, rows, hospital]);
+
+  return null;
 }
 
 /**

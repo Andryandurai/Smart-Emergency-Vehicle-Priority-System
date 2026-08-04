@@ -9,11 +9,13 @@
  * charge nurse checks when the phone rings; team readiness and the ward table
  * are what they check when deciding whether to accept the next case.
  */
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 
 import type { HospitalDashboard } from "@/api/types";
 import { fmtTime } from "@/components/ui";
 import type { HospitalOutletContext } from "@/hospital/HospitalShell";
+import { useHospitalNotices } from "@/hospital/notifications";
+import type { HospitalNotice } from "@/hospital/notifications";
 
 const STATUS_COPY: Record<string, string> = {
   ready: "Accepting emergency arrivals",
@@ -26,8 +28,12 @@ export function DashboardPage() {
 
   if (!board) return <div className="hp-loading">Loading the board…</div>;
 
+  // Two columns: the board, and the alert rail beside it. The rail is a
+  // sibling rather than a floating overlay so it can never cover a figure
+  // somebody is reading.
   return (
-    <div className="hp-page">
+    <div className="hp-dash">
+      <div className="hp-page">
       <section className={`hp-hero ${board.status}`}>
         <div className="hp-hero-id">
           <h1>{board.hospital.name}</h1>
@@ -141,7 +147,92 @@ export function DashboardPage() {
           <KV label="Emergency phone" value={board.hospital.emergency_phone || "—"} />
         </div>
       </section>
+      </div>
+
+      <NotificationPanel />
     </div>
+  );
+}
+
+/**
+ * The alert rail.
+ *
+ * Vertical, down the right of the board, and nothing in it expires. An entry
+ * stays until somebody acknowledges it, because the failure this replaces is a
+ * toast that appeared and faded while the charge nurse was across the room -
+ * after which nothing on any screen said an ambulance was coming.
+ *
+ * Acknowledged entries are kept, greyed, rather than deleted: "what came in
+ * this shift" is a question an ED asks, and a list that empties itself cannot
+ * answer it.
+ */
+function NotificationPanel() {
+  const items = useHospitalNotices((state) => state.items);
+  const acknowledge = useHospitalNotices((state) => state.acknowledge);
+  const acknowledgeAll = useHospitalNotices((state) => state.acknowledgeAll);
+  const outstanding = items.filter((item) => !item.acknowledged).length;
+
+  return (
+    <aside className="hp-notices" aria-label="Alerts">
+      <div className="hp-notices-head">
+        <h2>
+          Alerts
+          {outstanding > 0 && <span className="hp-notices-count">{outstanding}</span>}
+        </h2>
+        {outstanding > 1 && (
+          <button type="button" className="hp-linkbtn" onClick={acknowledgeAll}>
+            Acknowledge all
+          </button>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <p className="hp-notices-empty">
+          No alerts. You will be told here the moment a crew choose this hospital and
+          start driving, and again when they arrive.
+        </p>
+      ) : (
+        <div className="hp-notices-list">
+          {items.map((notice) => (
+            <NoticeRow key={notice.id} notice={notice} onAcknowledge={acknowledge} />
+          ))}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function NoticeRow({
+  notice,
+  onAcknowledge,
+}: {
+  notice: HospitalNotice;
+  onAcknowledge: (id: string) => void;
+}) {
+  return (
+    <article className={`hp-notice ${notice.kind}${notice.acknowledged ? " done" : ""}`}>
+      <div className="hp-notice-head">
+        <span className="hp-notice-title">{notice.title}</span>
+        <span className="hp-notice-time">{fmtTime(notice.at)}</span>
+      </div>
+      <p className="hp-notice-body">{notice.body}</p>
+      <div className="hp-notice-actions">
+        <Link className="hp-linkbtn" to="/h/ambulances">
+          View ambulance
+        </Link>
+        {notice.acknowledged ? (
+          <span className="hp-notice-done">✓ Acknowledged</span>
+        ) : (
+          <button
+            type="button"
+            className="hp-btn ghost small"
+            onClick={() => onAcknowledge(notice.id)}
+          >
+            Acknowledge
+          </button>
+        )}
+      </div>
+    </article>
   );
 }
 

@@ -210,22 +210,58 @@
 .pm-steps li.done .pm-step-dot { background: var(--pm-go); color: #04220e; }
 
 /* ------------------------------------------------------- choice grids */
+/* Emergency category cards.
+   Two per row rather than as many as fit: these are pressed one-handed,
+   in a moving vehicle, under time pressure, and a 150px card in a
+   four-column grid is a target you miss. The level is stated as a
+   corner badge as well as an edge colour, because the edge alone is a
+   colour code nobody has been taught. */
 .pm-choice-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 9px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px;
 }
 .pm-choice {
-  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
-  min-height: 74px; padding: 13px; text-align: left; border-radius: 12px;
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  justify-content: center;
+  min-height: 92px; padding: 15px 16px; text-align: left; border-radius: 14px;
   background: var(--pm-card); border: 1px solid var(--pm-line); color: var(--pm-text);
+  transition: transform .08s ease, border-color .12s ease;
 }
-.pm-choice.selected { border-color: var(--pm-accent); background: rgba(47, 129, 247, .16); }
-.pm-choice[data-level="1"] { border-left: 4px solid var(--pm-bad); }
-.pm-choice[data-level="2"] { border-left: 4px solid var(--pm-warn); }
-.pm-choice[data-level="3"] { border-left: 4px solid #d8c045; }
-.pm-choice[data-level="4"] { border-left: 4px solid #6b7a8d; }
+.pm-choice:active { transform: scale(.985); }
+.pm-choice.selected {
+  border-color: var(--pm-accent); background: rgba(47, 129, 247, .16);
+  box-shadow: inset 0 0 0 1px var(--pm-accent);
+}
+.pm-choice::after {
+  content: attr(data-level);
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 22px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #04121f; background: #6b7a8d;
+}
+.pm-choice[data-level="1"] { border-left: 5px solid var(--pm-bad); }
+.pm-choice[data-level="1"]::after { background: var(--pm-bad); color: #fff; }
+.pm-choice[data-level="2"] { border-left: 5px solid var(--pm-warn); }
+.pm-choice[data-level="2"]::after { background: var(--pm-warn); }
+.pm-choice[data-level="3"] { border-left: 5px solid #d8c045; }
+.pm-choice[data-level="3"]::after { background: #d8c045; }
+.pm-choice[data-level="4"] { border-left: 5px solid #6b7a8d; }
 .pm-choice.other { border-style: dashed; }
-.pm-choice-label { font-size: 14px; font-weight: 600; line-height: 1.25; }
-.pm-choice-sub { font-size: 11px; color: var(--pm-muted); }
+.pm-choice.other::after { content: "?"; background: #4a5766; color: var(--pm-text); }
+.pm-choice-label { font-size: 15px; font-weight: 650; line-height: 1.25; padding-right: 26px; }
+.pm-choice-sub { font-size: 11.5px; color: var(--pm-muted); }
+
+/* Two ways forward from the category step, side by side. */
+.pm-btn-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.pm-btn.secondary {
+  width: auto; white-space: nowrap;
+  background: transparent; border: 1px solid var(--pm-accent); color: var(--pm-accent);
+}
+.pm-btn.secondary:disabled { border-color: var(--pm-line); color: #5b687a; }
+@media (max-width: 420px) {
+  .pm-btn-row { grid-template-columns: 1fr; }
+  .pm-btn.secondary { width: 100%; }
+}
 
 .pm-symptom-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px;
@@ -257,6 +293,33 @@
 .pm-hospital-metrics { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--pm-muted); }
 .pm-hospital-metrics b { color: var(--pm-text); font-size: 15px; margin-right: 3px; }
 .pm-hospital-warn { font-size: 11.5px; color: var(--pm-warn); }
+
+/* The auto-start clock, inside the recommended hospital's own card so it
+   is unambiguous which hospital is about to be committed to. */
+.pm-hospital.counting {
+  border-color: var(--pm-go);
+  box-shadow: inset 0 0 0 1px var(--pm-go);
+}
+.pm-countdown {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 11px; border-radius: 10px;
+  background: rgba(41, 167, 69, .12); border: 1px solid rgba(41, 167, 69, .4);
+}
+.pm-countdown-ring {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #04220e; background: var(--pm-go);
+  animation: pm-tick 1s steps(1) infinite;
+}
+@keyframes pm-tick { 50% { opacity: .72; } }
+@media (prefers-reduced-motion: reduce) { .pm-countdown-ring { animation: none; } }
+.pm-countdown-copy { flex: 1; font-size: 11.5px; line-height: 1.45; color: var(--pm-text); }
+.pm-countdown-hold {
+  flex: 0 0 auto; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  font-size: 11.5px; font-weight: 700; color: var(--pm-text);
+  background: transparent; border: 1px solid var(--pm-line);
+}
+.pm-countdown-hold:hover { border-color: var(--pm-muted); }
 
 .pm-excluded { border-radius: 12px; border: 1px dashed var(--pm-line); padding: 12px; }
 .pm-excluded summary { cursor: pointer; font-size: 12.5px; color: var(--pm-muted); }

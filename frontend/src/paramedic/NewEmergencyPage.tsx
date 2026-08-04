@@ -13,7 +13,7 @@
  * the common answers are one tap, and free text exists only behind "Other
  * reason", where it is genuinely the only option left.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { dispatch as dispatchApi, hospitals as hospitalApi, shifts as shiftApi } from "@/api/endpoints";
@@ -30,6 +30,9 @@ import type {
 import { fmtDistance, fmtEta } from "@/components/ui";
 
 const UNDETERMINED = "unknown";
+
+/** How long the crew have to overrule the recommendation before it commits. */
+const AUTO_START_SECONDS = 10;
 
 /** Tap-only re-route reasons. "Other" is the single typed escape hatch. */
 const REROUTE_REASONS: { value: HospitalChoiceReason; label: string; hint: string }[] = [
@@ -84,6 +87,20 @@ export function NewEmergencyPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Auto-start countdown on the recommended hospital.
+   *
+   * The engine has already decided; the crew's job on this screen is to
+   * *disagree*, not to confirm. Making them press a button to accept an answer
+   * they were always going to accept costs seconds in a cardiac transport, so
+   * the recommendation commits itself unless somebody intervenes.
+   *
+   * `null` means no countdown is running - either because the crew touched the
+   * list (they are choosing, so the clock has no business rushing them), or
+   * because it has already fired.
+   */
+  const [autoIn, setAutoIn] = useState<number | null>(null);
+
   const load = useCallback(async () => {
     try {
       const mine = await shiftApi.mine();
@@ -109,6 +126,12 @@ export function NewEmergencyPage() {
   const recommended = recommendation?.recommended ?? null;
   const isReroute = Boolean(chosen && recommended && chosen.hospital_id !== recommended.hospital_id);
 
+  /** Stop the clock. Any deliberate act on this screen counts. */
+  const holdCountdown = useCallback(() => setAutoIn(null), []);
+
+  /** Kept in a ref so the countdown effect does not depend on form state. */
+  const submitRef = useRef<(() => Promise<void>) | null>(null);
+
   const eligible = useMemo(
     () => recommendation?.candidates.filter((c) => c.eligible) ?? [],
     [recommendation],
@@ -117,6 +140,24 @@ export function NewEmergencyPage() {
     () => recommendation?.candidates.filter((c) => !c.eligible) ?? [],
     [recommendation],
   );
+
+  /**
+   * Tick the auto-start clock.
+   *
+   * Fires `submitRef` rather than `submit` directly: the effect must not
+   * re-subscribe every time a piece of form state changes, or the countdown
+   * restarts from ten on each keystroke and never reaches zero.
+   */
+  useEffect(() => {
+    if (autoIn === null || step !== "hospital") return;
+    if (autoIn <= 0) {
+      setAutoIn(null);
+      void submitRef.current?.();
+      return;
+    }
+    const timer = window.setTimeout(() => setAutoIn((value) => (value ?? 1) - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [autoIn, step]);
 
   // --- guards -------------------------------------------------------------
   if (!shift || shift.status !== "active") {
@@ -230,6 +271,14 @@ export function NewEmergencyPage() {
     }
   };
 
+  /**
+   * Rank the hospitals for this patient, and start the clock.
+   *
+   * This is the route optimisation: `recommend` scores every capable hospital
+   * on live travel time from the vehicle's own position, so by the time this
+   * returns the road to each candidate has already been costed. Confirming
+   * only commits the trip to the winner and arms the corridor.
+   */
   const findHospitals = async () => {
     if (!category) return;
     if (category === UNDETERMINED && symptoms.length === 0) {
@@ -249,6 +298,10 @@ export function NewEmergencyPage() {
       setReason(null);
       setOtherReason("");
       setStep("hospital");
+      // Only when there is something to commit to. With no eligible hospital
+      // the crew must choose from the excluded list, and a countdown would be
+      // counting down to nothing.
+      setAutoIn(result.recommended ? AUTO_START_SECONDS : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not find a hospital.");
     } finally {
@@ -308,7 +361,10 @@ export function NewEmergencyPage() {
     }
   };
 
+  submitRef.current = submit;
+
   const reset = () => {
+    setAutoIn(null);
     setStep("category");
     setCategory(null);
     setSymptoms([]);
@@ -355,14 +411,41 @@ export function NewEmergencyPage() {
               <span className="pm-choice-sub">Record what you can see instead</span>
             </button>
           </div>
-          <button
-            type="button"
-            className="pm-btn primary"
-            disabled={!category}
-            onClick={() => setStep("observe")}
-          >
-            Next — patient assessment
-          </button>
+          {/*
+            Two ways forward, side by side.
+
+            The assessment is worth having and is the default. But a crew with
+            a patient who is arresting in front of them will not fill in an age
+            and a notes box first, and a workflow that insists gets abandoned
+            or falsified. "Skip to route" takes the category - which is what
+            the recommender actually matches on - and goes straight to finding
+            a hospital.
+          */}
+          <div className="pm-btn-row">
+            <button
+              type="button"
+              className="pm-btn primary"
+              disabled={!category}
+              onClick={() => setStep("observe")}
+            >
+              Next — patient assessment
+            </button>
+            <button
+              type="button"
+              className="pm-btn secondary"
+              disabled={!category || busy !== null}
+              onClick={() => void findHospitals()}
+              title="Go straight to hospital selection without recording an assessment"
+            >
+              {busy === "find" ? "Finding…" : "Skip to route"}
+            </button>
+          </div>
+          {category === UNDETERMINED && (
+            <p className="pm-note">
+              “Not sure” needs at least one observation before a hospital can be matched,
+              so the assessment step cannot be skipped for it.
+            </p>
+          )}
         </>
       )}
 
@@ -441,13 +524,26 @@ export function NewEmergencyPage() {
         <>
           <h2 className="pm-h2">Where are we taking them?</h2>
 
+          {/* The countdown lives inside the recommended hospital's own card,
+              not in a corner of the screen: it is that hospital that is about
+              to be committed to, and the crew have to be able to see which. */}
           {eligible.map((candidate, index) => (
             <HospitalOption
               key={candidate.hospital_id}
               candidate={candidate}
               best={index === 0}
               selected={chosen?.hospital_id === candidate.hospital_id}
+              countdown={
+                index === 0 && autoIn !== null && recommended?.hospital_id === candidate.hospital_id
+                  ? autoIn
+                  : null
+              }
+              onHold={holdCountdown}
               onSelect={() => {
+                // Choosing anything is an intervention, so the clock stops -
+                // including choosing the recommendation itself, which means
+                // "I have read this" rather than "hurry me along".
+                holdCountdown();
                 setChosen(candidate);
                 setReason(null);
               }}
@@ -466,7 +562,10 @@ export function NewEmergencyPage() {
                   candidate={candidate}
                   best={false}
                   selected={chosen?.hospital_id === candidate.hospital_id}
+                  countdown={null}
+                  onHold={holdCountdown}
                   onSelect={() => {
+                    holdCountdown();
                     setChosen(candidate);
                     setReason("patient_request");
                   }}
@@ -607,18 +706,25 @@ function HospitalOption({
   candidate,
   best,
   selected,
+  countdown,
+  onHold,
   onSelect,
 }: {
   candidate: HospitalCandidate;
   best: boolean;
   selected: boolean;
+  /** Seconds until this hospital commits itself, or null when not counting. */
+  countdown: number | null;
+  onHold: () => void;
   onSelect: () => void;
 }) {
   const readiness = Math.round((1 - candidate.workload_index) * 100);
   return (
     <button
       type="button"
-      className={`pm-hospital${selected ? " selected" : ""}${best ? " best" : ""}`}
+      className={`pm-hospital${selected ? " selected" : ""}${best ? " best" : ""}${
+        countdown !== null ? " counting" : ""
+      }`}
       onClick={onSelect}
     >
       <div className="pm-hospital-head">
@@ -628,6 +734,37 @@ function HospitalOption({
         </span>
         {selected && <span className="pm-tick">✓</span>}
       </div>
+
+      {countdown !== null && (
+        <div className="pm-countdown">
+          <span className="pm-countdown-ring" style={{ "--pm-cd": countdown } as never}>
+            {countdown}
+          </span>
+          <span className="pm-countdown-copy">
+            Starting the route here in {countdown}s unless you choose another hospital.
+          </span>
+          <span
+            className="pm-countdown-hold"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              // The card itself is a button, so this must not select the
+              // hospital as well - holding the clock is the opposite intent.
+              event.stopPropagation();
+              onHold();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                onHold();
+              }
+            }}
+          >
+            Hold
+          </span>
+        </div>
+      )}
       <div className="pm-hospital-metrics">
         <span>
           <b>{candidate.travel_time_min ?? "—"}</b> min

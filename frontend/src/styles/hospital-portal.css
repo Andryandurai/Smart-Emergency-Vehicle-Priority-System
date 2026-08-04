@@ -310,6 +310,136 @@
   background: var(--hp-bad); color: #fff;
 }
 
+/* ------------------------------------------------- alerts & popups */
+/* The dashboard is two columns: the board, and the alert rail beside it.
+   A sibling rather than a floating overlay, so it can never cover a
+   figure somebody is reading. */
+.hp-dash {
+  display: grid; grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0; align-items: start;
+}
+.hp-dash .hp-page { max-width: none; }
+
+.hp-notices {
+  position: sticky; top: 0; align-self: start;
+  max-height: calc(100vh - 106px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 20px 20px 40px 0;
+}
+.hp-notices-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hp-notices-head h2 {
+  margin: 0; font-size: 12px; font-weight: 750; letter-spacing: 1.1px;
+  text-transform: uppercase; color: var(--hp-dim);
+  display: flex; align-items: center; gap: 8px;
+}
+.hp-notices-count {
+  min-width: 20px; padding: 1px 7px; border-radius: 999px;
+  background: var(--hp-bad); color: #fff; font-size: 11px; font-weight: 800;
+  text-align: center; letter-spacing: 0;
+}
+.hp-notices-empty {
+  margin: 0; font-size: 12px; line-height: 1.55; color: var(--hp-dim);
+  background: var(--hp-card); border: 1px dashed var(--hp-line);
+  border-radius: 12px; padding: 14px;
+}
+.hp-notices-list { display: flex; flex-direction: column; gap: 9px; }
+
+.hp-notice {
+  background: var(--hp-card); border: 1px solid var(--hp-line);
+  border-left: 5px solid var(--hp-accent); border-radius: 11px; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.hp-notice.inbound { border-left-color: var(--hp-accent); }
+.hp-notice.arrived { border-left-color: var(--hp-ok); }
+.hp-notice.breakdown { border-left-color: var(--hp-bad); }
+/* Kept, not deleted: "what came in this shift" is a question an ED asks. */
+.hp-notice.done { opacity: .55; border-left-color: var(--hp-line); }
+.hp-notice-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.hp-notice-title { font-size: 13px; font-weight: 700; }
+.hp-notice-time { font-size: 10.5px; color: var(--hp-dim); }
+.hp-notice-body { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--hp-text); }
+.hp-notice-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hp-notice-done { font-size: 11px; font-weight: 700; color: var(--hp-ok); }
+.hp-linkbtn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--hp-accent); font-size: 11.5px; font-weight: 650; text-decoration: none;
+}
+
+/* Popups. Above every tab, and they do not fade - the only way one leaves
+   is somebody acting on it. */
+.hp-popups {
+  position: fixed; right: 20px; bottom: 20px; z-index: 3000;
+  display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 40px));
+}
+.hp-popup {
+  background: var(--hp-card); border: 1px solid var(--hp-line);
+  border-left: 5px solid var(--hp-accent); border-radius: 12px; padding: 13px 15px;
+  box-shadow: 0 8px 28px rgba(16, 32, 48, .18);
+  display: flex; flex-direction: column; gap: 7px;
+  animation: hp-slide .22s ease-out;
+}
+@keyframes hp-slide { from { transform: translateY(10px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .hp-popup { animation: none; } }
+.hp-popup.arrived { border-left-color: var(--hp-ok); }
+.hp-popup.breakdown { border-left-color: var(--hp-bad); }
+.hp-popup-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.hp-popup-tag { font-size: 13.5px; font-weight: 750; }
+.hp-popup-call { font-size: 12px; font-weight: 700; color: var(--hp-dim); }
+.hp-popup p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.hp-popup-actions { display: flex; gap: 8px; }
+.hp-btn.small { padding: 7px 13px; font-size: 12px; }
+
+.hp-link { width: 9px; height: 9px; border-radius: 50%; background: var(--hp-line); }
+.hp-link.open { background: var(--hp-ok); }
+.hp-link.connecting { background: var(--hp-warn); }
+.hp-link.closed, .hp-link.error { background: var(--hp-bad); }
+
+/* ------------------------------------------------ movement & arrival */
+.hp-overview { border-radius: 14px; overflow: hidden; border: 1px solid var(--hp-line); }
+.hp-overview-map { width: 100%; height: 300px; }
+.hp-overview-key {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 8px 14px; background: var(--hp-card); border-top: 1px solid var(--hp-line);
+  font-size: 11.5px; color: var(--hp-dim);
+}
+.hp-overview-key span { display: inline-flex; align-items: center; gap: 6px; }
+.hp-overview-key .k { width: 12px; height: 3px; border-radius: 2px; background: var(--hp-dim); }
+.hp-overview-key .k.moving { background: #2f81f7; }
+.hp-overview-key .k.arrived { background: var(--hp-ok); }
+.hp-overview-key .k.hosp { width: 9px; height: 9px; border-radius: 50%; background: var(--hp-bad); }
+
+.hp-progress { padding: 0 16px 12px; display: flex; align-items: center; gap: 12px; }
+.hp-progress-track {
+  position: relative; flex: 1; height: 6px; border-radius: 999px;
+  background: #e8edf2; overflow: visible;
+}
+.hp-progress-fill {
+  display: block; height: 100%; border-radius: 999px; background: var(--hp-accent);
+  transition: width .6s linear;
+}
+.hp-progress-pip {
+  position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--hp-accent); border: 2px solid #fff;
+  transform: translate(-50%, -50%); transition: left .6s linear;
+  box-shadow: 0 0 0 3px rgba(11, 107, 203, .18);
+}
+.hp-progress.arrived .hp-progress-fill,
+.hp-progress.arrived .hp-progress-pip { background: var(--hp-ok); }
+.hp-progress.arrived .hp-progress-pip { box-shadow: 0 0 0 3px rgba(18, 138, 82, .18); }
+.hp-progress-label { font-size: 11px; color: var(--hp-dim); min-width: 132px; text-align: right; }
+
+.hp-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+}
+.hp-state.moving { background: #eaf1f8; color: var(--hp-accent); }
+.hp-state.moving i {
+  width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+  animation: hp-pulse 1.2s ease-in-out infinite;
+}
+.hp-state.arrived { background: #e3f5ec; color: var(--hp-ok); }
+.hp-state.held { background: #eef2f6; color: var(--hp-dim); }
+
 /* ------------------------------------------------------------ updates */
 .hp-edit-grid {
   display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -363,7 +493,17 @@
 .hp-btn.ghost:hover:not(:disabled) { color: var(--hp-text); border-color: var(--hp-dim); }
 
 /* ------------------------------------------------------------- narrow */
+@media (max-width: 1180px) {
+  /* The alert rail drops under the board rather than squeezing it. */
+  .hp-dash { grid-template-columns: 1fr; }
+  .hp-notices {
+    position: static; max-height: none; padding: 0 22px 40px;
+  }
+}
 @media (max-width: 900px) {
+  .hp-progress { flex-direction: column; align-items: stretch; gap: 6px; }
+  .hp-progress-label { text-align: left; min-width: 0; }
+  .hp-popups { right: 12px; left: 12px; width: auto; }
   .hp-amb-head { grid-template-columns: 30px 1fr; row-gap: 8px; }
   .hp-amb-crew, .hp-amb-eta, .hp-amb-flags { grid-column: 2; }
   .hp-amb-detail { grid-template-columns: 1fr; }

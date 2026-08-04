@@ -184,15 +184,37 @@ DEMO_USERS = [
             "emergency_contact": "H. Sheikh +91 98400 42062",
         },
     },
+    # --- Hospitals --------------------------------------------------------
+    # One account per receiving hospital, not one shared "hospital" login.
+    #
+    # The portal shows *a* ward's board, and a shared account had to be told
+    # which one - so it carried a hospital picker in its header, which is a
+    # control no real emergency department wants: a charge nurse can change
+    # which hospital's beds they are editing by brushing a dropdown. Binding
+    # the account to the ward through `hospital_code` below removes the
+    # question, and `resolve_hospital` then ignores anything the client asks
+    # for.
     {
-        "username": "hospital",
-        "password": "sevps-hospital",
-        "email": "hospital@sevps.local",
-        "first_name": "Emergency",
-        "last_name": "Department",
+        "username": "rajivgandhi",
+        "password": "sevps-rajivgandhi",
+        "email": "rgggh@sevps.local",
+        "first_name": "Rajiv Gandhi",
+        "last_name": "Hospital",
         "is_staff": False,
         "is_superuser": False,
         "groups": [Role.HOSPITAL],
+        "hospital_code": "RGGGH",
+    },
+    {
+        "username": "kauvery",
+        "password": "sevps-kauvery",
+        "email": "kauvery@sevps.local",
+        "first_name": "Kauvery",
+        "last_name": "Hospital",
+        "is_staff": False,
+        "is_superuser": False,
+        "groups": [Role.HOSPITAL],
+        "hospital_code": "KAUVERY",
     },
     {
         "username": "public",
@@ -304,6 +326,16 @@ class Command(BaseCommand):
 
             user.groups.set(Group.objects.filter(name__in=spec["groups"]))
 
+            # Bind a hospital account to its ward.
+            #
+            # Done through `Hospital.staff_group` because that is the tenancy
+            # hook the permission classes and `resolve_hospital` already read -
+            # inventing a second mechanism would leave two answers to "which
+            # hospital is this user", which is exactly the ambiguity the
+            # binding exists to remove.
+            if spec.get("hospital_code"):
+                self._bind_hospital(user, spec["hospital_code"])
+
             # Identity details. Updated rather than only created, so editing
             # the spec and re-seeding actually corrects the roster - but the
             # avatar is never touched, because a crew member who uploaded
@@ -318,6 +350,32 @@ class Command(BaseCommand):
             rows.append((spec, user, created))
 
         self._report(rows, options["keep_passwords"])
+
+    def _bind_hospital(self, user, code: str) -> None:
+        """Give this account its own ward, through a per-hospital group.
+
+        Silently does nothing when the hospital has not been seeded yet -
+        `seed_users` is documented as runnable before `seed_demo`, and refusing
+        to create the accounts because the hospital registry is empty would
+        make the documented order wrong.
+        """
+        from apps.hospitals.models import Hospital
+
+        hospital = Hospital.objects.filter(code__iexact=code).first()
+        if hospital is None:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  hospital {code!r} not found - {user.username!r} is unbound "
+                    f"until `seed_demo` has run"
+                )
+            )
+            return
+
+        group, _ = Group.objects.get_or_create(name=f"hospital_{code.lower()}")
+        user.groups.add(group)
+        if hospital.staff_group_id != group.id:
+            hospital.staff_group = group
+            hospital.save(update_fields=["staff_group", "updated_at"])
 
     def _report(self, rows, keep_passwords: bool):
         width = max(len(s["username"]) for s, _, _ in rows)

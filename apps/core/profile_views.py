@@ -127,6 +127,14 @@ class DemoAccountsView(APIView):
     def get_permissions(self):
         return [AllowAny()]
 
+    @staticmethod
+    def _bound_hospital(user) -> str:
+        """The ward this account is tied to, if any."""
+        from apps.hospitals.models import Hospital
+
+        hospital = Hospital.objects.filter(staff_group__in=user.groups.all()).first()
+        return hospital.name if hospital else ""
+
     def get(self, request):
         if not settings.DEBUG:
             return Response({"accounts": [], "available": False})
@@ -156,6 +164,12 @@ class DemoAccountsView(APIView):
                     "role_labels": [ROLES[r].label for r in roles if r in ROLES],
                     "is_paramedic": Role.PARAMEDIC in roles,
                     "is_driver": Role.AMBULANCE in roles,
+                    "is_hospital": Role.HOSPITAL in roles,
+                    # Which ward this login opens. The hospital accounts are
+                    # bound to one each, and the sign-in list is the only place
+                    # a tester can find out which - "hospital" as a username
+                    # told them nothing.
+                    "hospital": self._bound_hospital(user),
                     "staff_id": profile.staff_id if profile else "",
                     "qualification": profile.qualification if profile else "",
                     "base_station": profile.base_station if profile else "",

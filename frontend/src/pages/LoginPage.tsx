@@ -125,10 +125,22 @@ export function LoginPage() {
               onPick={fill}
               showName
             />
+            {/* Hospital logins belong here rather than behind a picker inside
+                the hospital portal: each one opens exactly one ward's board,
+                so which ward it is has to be visible *before* signing in. */}
+            <AccountCard
+              title="Hospital logins"
+              subtitle="Each account opens its own hospital's board, ambulances and ward figures."
+              accounts={accounts.filter((a) => a.is_hospital)}
+              onPick={fill}
+              showHospital
+            />
             <AccountCard
               title="Other roles"
               subtitle=""
-              accounts={accounts.filter((a) => !a.is_paramedic && !a.is_driver)}
+              accounts={accounts.filter(
+                (a) => !a.is_paramedic && !a.is_driver && !a.is_hospital,
+              )}
               onPick={fill}
             />
             <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
@@ -148,12 +160,15 @@ function AccountCard({
   accounts,
   onPick,
   showName = false,
+  showHospital = false,
 }: {
   title: string;
   subtitle: string;
   accounts: DemoAccount[];
   onPick: (username: string, password: string) => void;
   showName?: boolean;
+  /** Show the ward the account opens instead of its holder's name. */
+  showHospital?: boolean;
 }) {
   if (accounts.length === 0) return null;
   return (
@@ -168,6 +183,7 @@ function AccountCard({
         <thead>
           <tr>
             {showName && <th>Name</th>}
+            {showHospital && <th>Hospital</th>}
             <th>Username</th>
             <th>Password</th>
             <th>Role</th>
@@ -190,6 +206,11 @@ function AccountCard({
                         .join(" · ")}
                     </div>
                   )}
+                </td>
+              )}
+              {showHospital && (
+                <td>
+                  <b>{account.hospital || account.name}</b>
                 </td>
               )}
               <td className="mono">{account.username}</td>

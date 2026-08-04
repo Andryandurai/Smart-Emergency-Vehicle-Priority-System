@@ -203,10 +203,38 @@ def _crew_for(vehicle) -> dict:
     return {"driver_name": name(shift.driver), "paramedic_name": name(shift.paramedic)}
 
 
+def _journey_progress(trip, route) -> dict:
+    """How far along the road to us this ambulance is.
+
+    Derived from the plan's total against the distance still to run, rather
+    than from elapsed time: a vehicle held at a junction has burned minutes
+    without covering ground, and a bar driven by the clock would show it
+    arriving while it sat still.
+
+    Returned as a percentage because that is what the board draws. A row of
+    metres tells a charge nurse nothing at a glance; a bar that is nearly full
+    tells them to move.
+    """
+    if route is None or not route.total_distance_m:
+        return {"percent": 0, "total_m": None, "is_moving": False}
+
+    remaining = trip.distance_remaining_m
+    if remaining is None:
+        remaining = route.total_distance_m
+    travelled = max(0.0, route.total_distance_m - remaining)
+    percent = int(round(min(1.0, travelled / route.total_distance_m) * 100))
+    return {
+        "percent": percent,
+        "total_m": route.total_distance_m,
+        "is_moving": (trip.vehicle.speed_kmh or 0) > 1.0,
+    }
+
+
 def _ambulance_row(trip, request) -> dict:
     vehicle = trip.vehicle
     route = trip.active_route
     return {
+        "progress": _journey_progress(trip, route),
         "trip_id": trip.id,
         "reference": trip.reference,
         "ambulance_number": vehicle.callsign,
