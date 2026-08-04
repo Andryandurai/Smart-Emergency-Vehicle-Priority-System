@@ -164,11 +164,47 @@ class CrewShift(TimeStampedModel, UUIDModel):
         self.decline_reason = reason
         self.ended_at = timezone.now()
         self.save(update_fields=["status", "decline_reason", "ended_at", "updated_at"])
+        self.release_vehicle()
 
     def end(self) -> None:
         self.status = ShiftStatus.ENDED
         self.ended_at = timezone.now()
         self.save(update_fields=["status", "ended_at", "updated_at"])
+        self.release_vehicle()
+
+    def release_vehicle(self) -> None:
+        """Hand the ambulance back to the pool the moment the crew signs off.
+
+        Ending a shift used to close the *shift* and leave the *vehicle* where
+        the last job left it - AT_HOSPITAL, RETURNING, ON_SCENE. Nothing ever
+        moved it back, so an ambulance that finished a run was crewless and
+        yet permanently absent from the takeover picker: the next driver saw
+        an empty board and the vehicle was, in practice, retired.
+
+        Two states are deliberately left alone. OFFLINE means the onboard unit
+        is not reporting, and OUT_OF_SERVICE is somebody's explicit decision -
+        neither is a vehicle a crew signing off can declare fit. Readiness is
+        untouched on purpose: a grounded ambulance stays grounded, and is
+        filtered out of the picker by readiness rather than by status.
+        """
+        from apps.core.enums import VehicleStatus
+
+        held = {
+            VehicleStatus.DISPATCHED,
+            VehicleStatus.ON_SCENE,
+            VehicleStatus.TRANSPORTING,
+            VehicleStatus.AT_HOSPITAL,
+            VehicleStatus.RETURNING,
+        }
+        vehicle = self.vehicle
+        if vehicle.status not in held:
+            return
+        # Still carrying a patient. The crew signing off does not make the
+        # ambulance free - the response has to finish or be cancelled first.
+        if vehicle.active_trip is not None:
+            return
+        vehicle.status = VehicleStatus.AVAILABLE
+        vehicle.save(update_fields=["status", "updated_at"])
 
 
 class EquipmentCheck(TimeStampedModel):

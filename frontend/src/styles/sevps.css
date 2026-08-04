@@ -537,18 +537,25 @@ h2 { font-size: 15px; margin: 22px 0 10px; }
    do not fit in a row anybody can read.
    =================================================================== */
 
-.crew-summary, .crew-grid, .amb-grid { margin-bottom: 14px; }
+.crew-grid, .amb-grid { margin-bottom: 14px; }
 
-.crew-summary {
-  display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+/* The counts and the filter sit on one line.
+   They were stacked, which pushed the first card below the fold on a laptop
+   and made a board whose whole job is to be read at a glance need a scroll
+   before it said anything. */
+.crew-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px; margin: 4px 0 14px;
 }
+.crew-summary { display: flex; flex-wrap: wrap; gap: 10px; }
 .crew-stat {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 16px; display: flex; flex-direction: column; gap: 2px;
+  min-width: 96px;
 }
 .crew-stat b { font-size: 24px; font-weight: 800; line-height: 1; }
 .crew-stat span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.crew-filters { margin: 0; flex-wrap: wrap; }
 
 .crew-grid, .amb-grid {
   display: grid; gap: 12px;
@@ -559,9 +566,17 @@ h2 { font-size: 15px; margin: 22px 0 10px; }
   background: var(--panel); border: 1px solid var(--line);
   border-left: 4px solid var(--line); border-radius: 12px; overflow: hidden;
 }
-.crew-card.on-duty, .amb-card { border-left-color: #2ecc71; }
-.crew-card.on-call, .amb-card.on-call { border-left-color: #f39c12; }
+.amb-card { border-left-color: #2ecc71; }
+.amb-card.on-call { border-left-color: #f39c12; }
 .amb-card.grounded { border-left-color: #e74c3c; }
+
+/* Three states, three colours, in the order a supervisor cares about them:
+   crewed and working, signing on, not on shift. The stripe is what makes an
+   Off Duty card readable as one without reading its badge. */
+.crew-card.on-duty { border-left-color: #2ecc71; }
+.crew-card.signing-on { border-left-color: #f39c12; }
+.crew-card.off-duty { border-left-color: #4a5666; opacity: .82; }
+.crew-card.off-duty:hover { opacity: 1; }
 
 .crew-card-head, .amb-card-head {
   width: 100%; display: flex; align-items: center; gap: 11px;
@@ -579,9 +594,24 @@ h2 { font-size: 15px; margin: 22px 0 10px; }
 }
 .crew-id, .amb-id { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .crew-name { font-size: 14.5px; font-weight: 650; }
+/* The name must be allowed to shrink before the status badge wraps: a card
+   reading "Transporting" over two lines is the one thing on it that has to
+   stay legible. */
+.crew-id .crew-name, .crew-id .small {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .crew-flags, .amb-flags { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.crew-flags { flex: 0 0 auto; }
+.crew-flags .badge { white-space: nowrap; }
 
-.crew-assign, .amb-crew {
+/* Two columns, always. `auto-fit` collapsed to one on a narrow card and to
+   four on a wide one, so the same four fields landed in a different place on
+   every card in the grid and the labels stopped lining up across the board. */
+.crew-assign {
+  padding: 0 14px 12px; display: grid; gap: 5px 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.amb-crew {
   padding: 0 14px 12px; display: grid; gap: 5px;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }

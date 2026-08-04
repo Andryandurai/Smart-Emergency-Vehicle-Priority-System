@@ -22,6 +22,22 @@ import { useSocket } from "@/hooks/useSocket";
 
 type Seat = "driver" | "paramedic";
 
+/**
+ * The tone a live status is drawn in.
+ *
+ * Three bands, because a supervisor scanning the board is asking one question
+ * of each card: can I give this person a job? Green means yes, amber means
+ * they are already on one, grey means they are not on shift at all. The
+ * labels themselves are the server's - see ``_live_status`` in
+ * apps/fleet/crew_api.py - so a status added there gets a sensible tone here
+ * rather than a crash.
+ */
+function statusTone(status: string): "ok" | "warn" | "l4" {
+  if (status === "Off Duty" || status === "Shift Ended") return "l4";
+  if (status === "Available" || status === "On Duty") return "ok";
+  return "warn";
+}
+
 export function DriversPage() {
   return <CrewBoard seat="driver" />;
 }
@@ -34,7 +50,7 @@ function CrewBoard({ seat }: { seat: Seat }) {
   const [roster, setRoster] = useState<CrewRoster | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<number | null>(null);
-  const [filter, setFilter] = useState<"all" | "on_duty" | "on_call">("all");
+  const [filter, setFilter] = useState<"all" | "on_duty" | "off_duty">("all");
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -70,9 +86,20 @@ function CrewBoard({ seat }: { seat: Seat }) {
   });
 
   const people = (seat === "driver" ? roster?.drivers : roster?.paramedics) ?? [];
-  const rows = people.filter((person) =>
-    filter === "on_duty" ? person.on_duty : filter === "on_call" ? Boolean(person.mission) : true,
-  );
+
+  /**
+   * Off duty is the server's answer, not `!on_duty`.
+   *
+   * `on_duty` is false for somebody mid-takeover as well - a driver standing
+   * at an ambulance running its twenty-one point inspection is signed on and
+   * halfway into a shift. Filing them under Off Duty would put a person who
+   * is at work on the board of people who are not.
+   */
+  const onDuty = people.filter((person) => !person.off_duty);
+  const offDuty = people.filter((person) => person.off_duty);
+
+  const rows =
+    filter === "on_duty" ? onDuty : filter === "off_duty" ? offDuty : people;
 
   const label = seat === "driver" ? "Driver" : "Paramedic";
   const partnerLabel = seat === "driver" ? "Paramedic" : "Driver";
@@ -82,45 +109,50 @@ function CrewBoard({ seat }: { seat: Seat }) {
       <div className="page-head">
         <h1>{label}s</h1>
         <p>
-          Who is on duty, the ambulance they are crewing, who with, and the job they are
-          on. Updates live.
+          Every {label.toLowerCase()} on the roster and what they are doing right now —
+          the ambulance they are crewing, who with, and the job they are on. Status
+          follows the shift and the trip, and updates on its own.
         </p>
       </div>
 
       <ErrorNote error={error} />
 
-      {roster && (
-        <div className="crew-summary">
-          <Stat value={people.length} label={`${label}s`} />
-          <Stat value={people.filter((p) => p.on_duty).length} label="On duty" />
-          <Stat value={people.filter((p) => p.mission).length} label="On a call" />
-          <Stat
-            value={people.filter((p) => !p.on_duty).length}
-            label="Off duty"
-          />
-        </div>
-      )}
+      <div className="crew-toolbar">
+        {roster && (
+          <div className="crew-summary">
+            <Stat value={people.length} label={`${label}s`} />
+            <Stat value={onDuty.length} label="On duty" />
+            <Stat value={offDuty.length} label="Off duty" />
+          </div>
+        )}
 
-      <div className="fleet-filters">
-        {([
-          ["all", "All"],
-          ["on_duty", "On duty"],
-          ["on_call", "On a call"],
-        ] as const).map(([value, text]) => (
-          <button
-            key={value}
-            type="button"
-            className={filter === value ? "active" : ""}
-            onClick={() => setFilter(value)}
-          >
-            {text}
-          </button>
-        ))}
+        <div className="fleet-filters crew-filters">
+          {([
+            ["all", `All ${label.toLowerCase()}s`],
+            ["on_duty", "On duty"],
+            ["off_duty", "Off duty"],
+          ] as const).map(([value, text]) => (
+            <button
+              key={value}
+              type="button"
+              className={`chip${filter === value ? " on" : ""}`}
+              onClick={() => setFilter(value)}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
       </div>
 
       {rows.length === 0 ? (
         <div className="card">
-          <p className="muted">No {label.toLowerCase()} matches that filter.</p>
+          <p className="muted">
+            {filter === "off_duty"
+              ? `Every ${label.toLowerCase()} is signed on. Nobody is off duty.`
+              : filter === "on_duty"
+                ? `No ${label.toLowerCase()} is signed on right now.`
+                : `No ${label.toLowerCase()} is on the roster.`}
+          </p>
         </div>
       ) : (
         <div className="crew-grid">
@@ -138,7 +170,8 @@ function CrewBoard({ seat }: { seat: Seat }) {
 
       {roster && (
         <p className="muted" style={{ fontSize: 11.5 }}>
-          Updated {fmtTime(roster.generated_at)}.
+          {rows.length} of {people.length} {label.toLowerCase()}
+          {people.length === 1 ? "" : "s"} · updated {fmtTime(roster.generated_at)}.
         </p>
       )}
     </div>
@@ -164,7 +197,9 @@ function CrewCard({
     .toUpperCase();
 
   return (
-    <article className={`crew-card${person.on_duty ? " on-duty" : ""}${person.mission ? " on-call" : ""}`}>
+    <article
+      className={`crew-card${person.off_duty ? " off-duty" : person.on_duty ? " on-duty" : " signing-on"}`}
+    >
       <button type="button" className="crew-card-head" onClick={onToggle} aria-expanded={expanded}>
         {person.avatar_url ? (
           <img className="crew-avatar" src={person.avatar_url} alt={person.name} />
@@ -179,7 +214,11 @@ function CrewCard({
           </span>
         </span>
         <span className="crew-flags">
-          <Badge tone={person.on_duty ? "ok" : "warn"}>{person.shift_status}</Badge>
+          {/* The live state, not the shift record. `status` moves as the trip
+              moves - Available, On Route, On Scene, Transporting - which is
+              what somebody looking at this board is actually asking. The shift
+              row below still carries the formal shift state. */}
+          <Badge tone={statusTone(person.status)}>{person.status}</Badge>
           {person.mission_priority && (
             <Badge tone={levelClass(person.mission_priority) as "l1"}>
               L{person.mission_priority}
@@ -192,7 +231,7 @@ function CrewCard({
         <Field label="Assigned ambulance" value={person.vehicle ?? "—"} strong />
         <Field label={`Assigned ${partnerLabel.toLowerCase()}`} value={person.partner ?? "—"} />
         <Field label="Current mission" value={person.mission ?? "None"} />
-        <Field label="Current status" value={person.status} />
+        <Field label="Shift" value={person.shift_status} />
       </div>
 
       {expanded && (

@@ -31,6 +31,12 @@ from apps.fleet.readiness import apply_readiness
 
 User = get_user_model()
 
+#: How long after signing off a crew member reads "Shift Ended" rather than
+#: "Off Duty" on the admin boards. One changeover's worth - long enough that a
+#: supervisor watching a handover sees who has just come off, short enough
+#: that yesterday's crew are plainly off duty.
+RECENTLY_ENDED_HOURS = 8
+
 
 def _person(user) -> dict | None:
     if user is None:
@@ -228,37 +234,55 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
             groups__name__in=group_names_for(Role.PARAMEDIC), is_active=True
         ).distinct()
 
-        live = {
-            shift.driver_id: shift
-            for shift in CrewShift.objects.open().select_related(
+        open_shifts = list(
+            CrewShift.objects.open().select_related(
                 "vehicle", "driver", "paramedic", "equipment_check"
             )
-        }
+        )
+        live = {shift.driver_id: shift for shift in open_shifts}
         by_paramedic = {
-            shift.paramedic_id: shift
-            for shift in CrewShift.objects.open().select_related(
-                "vehicle", "driver", "paramedic", "equipment_check"
-            )
-            if shift.paramedic_id
+            shift.paramedic_id: shift for shift in open_shifts if shift.paramedic_id
         }
+
+        # The shift somebody has just come off, so the board can say "Shift
+        # ended" for the hour after they sign off rather than jumping straight
+        # to "Off duty" - the two mean different things to a supervisor
+        # looking at the roster mid-changeover. Ascending, so the last write
+        # per person is their most recent shift.
+        since = timezone.now() - timezone.timedelta(hours=RECENTLY_ENDED_HOURS)
+        ended_driver: dict[int, CrewShift] = {}
+        ended_paramedic: dict[int, CrewShift] = {}
+        for shift in CrewShift.objects.filter(
+            status__in=[ShiftStatus.ENDED, ShiftStatus.DECLINED], ended_at__gte=since
+        ).order_by("ended_at"):
+            ended_driver[shift.driver_id] = shift
+            if shift.paramedic_id:
+                ended_paramedic[shift.paramedic_id] = shift
+
         profiles = {p.user_id: p for p in StaffProfile.objects.all()}
 
         return Response(
             {
                 "generated_at": timezone.now(),
                 "drivers": [
-                    self._crew_row(user, live.get(user.id), "driver", profiles, request)
+                    self._crew_row(
+                        user, live.get(user.id), "driver", profiles, request,
+                        ended=ended_driver.get(user.id),
+                    )
                     for user in drivers.order_by("first_name", "username")
                 ],
                 "paramedics": [
-                    self._crew_row(user, by_paramedic.get(user.id), "paramedic", profiles, request)
+                    self._crew_row(
+                        user, by_paramedic.get(user.id), "paramedic", profiles, request,
+                        ended=ended_paramedic.get(user.id),
+                    )
                     for user in paramedics.order_by("first_name", "username")
                 ],
             }
         )
 
     @staticmethod
-    def _crew_row(user, shift, seat: str, profiles: dict, request) -> dict:
+    def _crew_row(user, shift, seat: str, profiles: dict, request, ended=None) -> dict:
         """One person, their pairing, and the job they are on."""
         profile = profiles.get(user.id)
         vehicle = shift.vehicle if shift else None
@@ -286,7 +310,16 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
             ),
             # --- assignment ---
             "on_duty": bool(shift and shift.status == ShiftStatus.ACTIVE),
-            "shift_status": shift.get_status_display() if shift else "Off duty",
+            # No open shift of any kind. Distinct from ``on_duty``, which is
+            # false for a driver mid-takeover as well - somebody standing at
+            # an ambulance running its inspection is not off duty, and the
+            # Off Duty board must not claim they are.
+            "off_duty": shift is None,
+            "shift_status": (
+                shift.get_status_display() if shift
+                else "Shift ended" if ended is not None
+                else "Off duty"
+            ),
             "vehicle": vehicle.callsign if vehicle else None,
             "vehicle_registration": vehicle.registration if vehicle else "",
             "partner": (partner.get_full_name() or partner.get_username()) if partner else None,
@@ -303,11 +336,7 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
             "mission_eta": trip.eta if trip else None,
             "mission_priority": trip.priority_level if trip else None,
             # --- live monitoring ---
-            "status": (
-                trip.get_stage_display() if trip
-                else vehicle.get_status_display() if vehicle
-                else "Off duty"
-            ),
+            "status": CrewShiftViewSet._live_status(shift, vehicle, trip, seat, ended),
             "monitoring": {
                 "latitude": vehicle.latitude if vehicle else None,
                 "longitude": vehicle.longitude if vehicle else None,
@@ -325,6 +354,54 @@ class CrewShiftViewSet(viewsets.ReadOnlyModelViewSet):
                 "distance_remaining_m": trip.distance_remaining_m if trip else None,
             },
         }
+
+    @staticmethod
+    def _live_status(shift, vehicle, trip, seat: str, ended) -> str:
+        """Where this person is in their shift, right now.
+
+        One vocabulary for both crew boards, derived from the shift and the
+        trip rather than stored anywhere, so it cannot go stale: the moment a
+        trip advances a stage or a shift ends, the next read of the roster
+        says something different without anybody updating a status field.
+
+        Deliberately not ``trip.get_stage_display()``. The stage labels are
+        written for a dispatcher reading one response ("En route to scene",
+        "On scene - patient assessment"); a supervisor scanning forty crew
+        cards needs two words per person, in the same words the driver and
+        paramedic portals use.
+        """
+        if shift is None:
+            # Just come off a shift, rather than never on one today.
+            return "Shift Ended" if ended is not None else "Off Duty"
+
+        if shift.status in {ShiftStatus.DRAFT, ShiftStatus.PENDING}:
+            # Vehicle claimed, inspection running, or waiting on the paramedic
+            # to accept. Signed on, not yet crewed.
+            return "On Duty"
+
+        if trip is not None:
+            if trip.stage in {TripStage.CREATED, TripStage.TO_SCENE}:
+                return "On Route"
+            if trip.stage == TripStage.ON_SCENE:
+                # A paramedic on scene with an assessed patient is treating
+                # them; the driver alongside is not. Same trip, two jobs.
+                treating = seat == "paramedic" and (
+                    trip.emergency_category != EmergencyCategory.UNKNOWN
+                    or trip.destination_hospital_id is not None
+                )
+                return "Treating Patient" if treating else "On Scene"
+            if trip.stage == TripStage.TO_HOSPITAL:
+                return "Transporting"
+            if trip.stage == TripStage.ARRIVED:
+                return "At Hospital"
+            return trip.get_stage_display()
+
+        # Active, no job. "Available" only when the ambulance itself is free -
+        # a crew whose vehicle is still returning to base or parked at a
+        # hospital bay is on duty but not yet takeable by dispatch.
+        if vehicle is not None and vehicle.status == VehicleStatus.AVAILABLE:
+            return "Available"
+        return "On Duty"
 
     @action(detail=False, methods=["get"], url_path="mine")
     def mine(self, request):

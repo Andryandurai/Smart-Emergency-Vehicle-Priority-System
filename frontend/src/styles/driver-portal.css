@@ -300,6 +300,9 @@
 .dp-veh-meta.dim { opacity: .7; }
 .dp-crew-name { font-size: 14px; font-weight: 650; }
 .dp-crew-user { font-size: 11px; color: var(--dp-dim); }
+/* Availability and readiness answer different questions, so they are two
+   chips rather than one - see VehicleReadiness in apps/core/enums.py. */
+.dp-veh-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
 
 .dp-ready-banner {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;

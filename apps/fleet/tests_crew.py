@@ -312,3 +312,185 @@ class ThreeStepTakeoverTests(TestCase):
         )
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.data["status"], ShiftStatus.ACTIVE)
+
+
+class VehicleReleaseTests(TestCase):
+    """Signing off hands the ambulance back to the next driver.
+
+    The shift used to close and the vehicle stay wherever the last job left
+    it - ``at_hospital``, ``returning``. Nothing moved it back, so a crewless
+    ambulance was permanently absent from the takeover picker and, in
+    practice, retired from the fleet.
+    """
+
+    def setUp(self):
+        self.vehicle = EmergencyVehicle.objects.create(
+            callsign="AMB-REL", latitude=13.0, longitude=80.0,
+            status=VehicleStatus.AVAILABLE,
+        )
+        self.driver = crew_member("d_release")
+        self.paramedic = crew_member("p_release")
+
+    def _live_shift(self) -> CrewShift:
+        shift = CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, paramedic=self.paramedic,
+            status=ShiftStatus.ACTIVE,
+        )
+        EquipmentCheck.objects.create(shift=shift)
+        return shift
+
+    def test_ending_a_shift_returns_the_ambulance_to_the_pool(self):
+        shift = self._live_shift()
+        self.vehicle.status = VehicleStatus.AT_HOSPITAL
+        self.vehicle.save(update_fields=["status"])
+
+        response = client_for(self.driver).post(f"/api/v1/fleet/shifts/{shift.id}/end/")
+        self.assertEqual(response.status_code, 200)
+
+        self.vehicle.refresh_from_db()
+        self.assertEqual(self.vehicle.status, VehicleStatus.AVAILABLE)
+
+    def test_the_released_ambulance_is_offered_to_the_next_driver(self):
+        shift = self._live_shift()
+        self.vehicle.status = VehicleStatus.RETURNING
+        self.vehicle.save(update_fields=["status"])
+
+        # Nothing to take over while the crew is still signed on.
+        picker = client_for(self.driver).get("/api/v1/fleet/shifts/selectable-vehicles/")
+        self.assertNotIn(
+            self.vehicle.callsign, [v["callsign"] for v in picker.data["vehicles"]]
+        )
+
+        client_for(self.driver).post(f"/api/v1/fleet/shifts/{shift.id}/end/")
+
+        picker = client_for(self.driver).get("/api/v1/fleet/shifts/selectable-vehicles/")
+        self.assertIn(
+            self.vehicle.callsign, [v["callsign"] for v in picker.data["vehicles"]]
+        )
+
+    def test_an_ambulance_still_carrying_a_patient_is_not_released(self):
+        """A crew signing off does not make a live response go away."""
+        from apps.core.enums import TripStage
+        from apps.dispatch.models import EmergencyTrip
+
+        shift = self._live_shift()
+        EmergencyTrip.objects.create(
+            vehicle=self.vehicle, emergency_category="cardiac",
+            stage=TripStage.TO_HOSPITAL,
+        )
+        self.vehicle.status = VehicleStatus.TRANSPORTING
+        self.vehicle.save(update_fields=["status"])
+
+        client_for(self.driver).post(f"/api/v1/fleet/shifts/{shift.id}/end/")
+
+        self.vehicle.refresh_from_db()
+        self.assertEqual(self.vehicle.status, VehicleStatus.TRANSPORTING)
+
+    def test_an_offline_vehicle_is_not_declared_fit_by_a_shift_ending(self):
+        """OFFLINE means the onboard unit is silent - not a state to overrule."""
+        shift = self._live_shift()
+        self.vehicle.status = VehicleStatus.OFFLINE
+        self.vehicle.save(update_fields=["status"])
+
+        client_for(self.driver).post(f"/api/v1/fleet/shifts/{shift.id}/end/")
+
+        self.vehicle.refresh_from_db()
+        self.assertEqual(self.vehicle.status, VehicleStatus.OFFLINE)
+
+
+class RosterStatusTests(TestCase):
+    """The crew boards' live status ladder, derived not stored."""
+
+    def setUp(self):
+        self.vehicle = EmergencyVehicle.objects.create(
+            callsign="AMB-ROST", latitude=13.0, longitude=80.0,
+            status=VehicleStatus.AVAILABLE,
+        )
+        self.driver = crew_member("d_roster")
+        self.paramedic = User.objects.create_user("p_roster", password="pw")
+        group, _ = Group.objects.get_or_create(name=Role.PARAMEDIC)
+        self.paramedic.groups.add(group)
+
+    def _roster(self) -> dict:
+        response = client_for(self.driver).get("/api/v1/fleet/shifts/roster/")
+        self.assertEqual(response.status_code, 200)
+        return response.data
+
+    def _driver_row(self) -> dict:
+        return next(
+            row for row in self._roster()["drivers"]
+            if row["username"] == self.driver.username
+        )
+
+    def test_a_driver_with_no_shift_is_off_duty(self):
+        row = self._driver_row()
+        self.assertTrue(row["off_duty"])
+        self.assertEqual(row["status"], "Off Duty")
+
+    def test_a_driver_mid_takeover_is_not_filed_as_off_duty(self):
+        """Vehicle claimed, inspection running. At work, not on the road."""
+        CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, status=ShiftStatus.DRAFT
+        )
+        row = self._driver_row()
+        self.assertFalse(row["off_duty"])
+        self.assertFalse(row["on_duty"])
+        self.assertEqual(row["status"], "On Duty")
+
+    def test_a_crewed_driver_with_no_job_is_available(self):
+        CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, paramedic=self.paramedic,
+            status=ShiftStatus.ACTIVE,
+        )
+        self.assertEqual(self._driver_row()["status"], "Available")
+
+    def test_the_status_follows_the_trip_stage(self):
+        from apps.core.enums import TripStage
+        from apps.dispatch.models import EmergencyTrip
+
+        CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, paramedic=self.paramedic,
+            status=ShiftStatus.ACTIVE,
+        )
+        trip = EmergencyTrip.objects.create(
+            vehicle=self.vehicle, emergency_category="cardiac", stage=TripStage.TO_SCENE
+        )
+        self.assertEqual(self._driver_row()["status"], "On Route")
+
+        trip.stage = TripStage.ON_SCENE
+        trip.save(update_fields=["stage"])
+        self.assertEqual(self._driver_row()["status"], "On Scene")
+
+        trip.stage = TripStage.TO_HOSPITAL
+        trip.save(update_fields=["stage"])
+        self.assertEqual(self._driver_row()["status"], "Transporting")
+
+    def test_the_paramedic_on_scene_with_an_assessed_patient_is_treating(self):
+        """Same trip, two seats, two jobs - the driver is not treating anyone."""
+        from apps.core.enums import TripStage
+        from apps.dispatch.models import EmergencyTrip
+
+        CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, paramedic=self.paramedic,
+            status=ShiftStatus.ACTIVE,
+        )
+        EmergencyTrip.objects.create(
+            vehicle=self.vehicle, emergency_category="cardiac", stage=TripStage.ON_SCENE
+        )
+        roster = self._roster()
+        medic = next(
+            row for row in roster["paramedics"]
+            if row["username"] == self.paramedic.username
+        )
+        self.assertEqual(medic["status"], "Treating Patient")
+        self.assertEqual(self._driver_row()["status"], "On Scene")
+
+    def test_a_driver_who_has_just_signed_off_reads_shift_ended(self):
+        shift = CrewShift.objects.create(
+            vehicle=self.vehicle, driver=self.driver, paramedic=self.paramedic,
+            status=ShiftStatus.ACTIVE,
+        )
+        shift.end()
+        row = self._driver_row()
+        self.assertTrue(row["off_duty"])
+        self.assertEqual(row["status"], "Shift Ended")

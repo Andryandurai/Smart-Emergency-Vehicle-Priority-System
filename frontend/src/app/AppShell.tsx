@@ -20,10 +20,10 @@ const NAV: NavItem[] = [
   // URL for an administrator who wants to see what a crew sees.
   { to: "/drivers", label: "Drivers", authOnly: true },
   { to: "/paramedics", label: "Paramedics", authOnly: true },
-  // "Road Alerts" is the public receiver that has always lived at /driver and
-  // warns civilians an ambulance is coming - a different person entirely from
-  // the drivers on the board above.
-  { to: "/driver", label: "Road Alerts" },
+  // No "Road Alerts" tab. `/driver` is the public road-user alert receiver -
+  // a civilian's screen, not an operator's - and it stays reachable at its own
+  // URL for the phones and roadside devices that open it directly. What it
+  // never was is a control-room destination, so it is off the admin nav.
   { to: "/boards", label: "Boards" },
   { to: "/settings", label: "Settings", authOnly: true },
 ];

@@ -321,21 +321,30 @@ class EmergencyVehicle(TimeStampedModel, UUIDModel, GeoPointModel):
         rendered for the whole fleet on a timer, and a lazy load per row is
         an N+1 on the busiest screen in the system.
         """
+        # DRAFT counts as crewed. A driver standing at the vehicle part-way
+        # through its inspection has it; reporting "No crew signed on" made
+        # the board disagree with both the uniqueness constraint and the
+        # takeover picker, which offered an ambulance somebody was already
+        # holding. The three statuses must match ``CrewShift.objects.open()``.
         shift = next(
-            (s for s in self.shifts.all() if s.status in {"pending", "active"}), None
+            (s for s in self.shifts.all() if s.status in {"draft", "pending", "active"}),
+            None,
         )
         trip = self.active_trip
         return {
             **self.as_tracking_payload(),
+            "is_demo": self.is_demo,
             # --- crew -------------------------------------------------------
             "shift_status": shift.status if shift else "no_shift",
             "shift_status_display": shift.get_status_display() if shift else "No crew signed on",
             "driver_name": (
                 shift.driver.get_full_name() or shift.driver.get_username()
             ) if shift else None,
+            # Null on a DRAFT shift by design: the driver has claimed the
+            # vehicle and has not named anybody yet.
             "paramedic_name": (
                 shift.paramedic.get_full_name() or shift.paramedic.get_username()
-            ) if shift else None,
+            ) if shift and shift.paramedic_id else None,
             "on_duty_since": shift.accepted_at if shift else None,
             # --- inspection -------------------------------------------------
             "inspection_status": self._inspection_status(shift),

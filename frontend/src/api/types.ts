@@ -449,6 +449,14 @@ export interface CrewMember {
   blood_group: string;
   avatar_url: string | null;
   on_duty: boolean;
+  /**
+   * No open shift at all.
+   *
+   * Not `!on_duty`: a driver mid-takeover — vehicle claimed, inspection
+   * running — is neither on duty nor off it, and the Off Duty board must not
+   * claim somebody at work is at home.
+   */
+  off_duty: boolean;
   shift_status: string;
   vehicle: string | null;
   vehicle_registration: string;
@@ -460,6 +468,14 @@ export interface CrewMember {
   mission_hospital: string | null;
   mission_eta: string | null;
   mission_priority: PriorityLevel | null;
+  /**
+   * Where this person is in their shift right now, in one phrase.
+   *
+   * Derived server-side from the shift and the live trip on every read, never
+   * stored: Available, On Duty, On Route, On Scene, Treating Patient,
+   * Transporting, At Hospital, Shift Ended, Off Duty. See `_live_status` in
+   * apps/fleet/crew_api.py — that function owns the vocabulary.
+   */
   status: string;
   monitoring: {
     latitude: number | null;
@@ -744,6 +760,9 @@ export interface TransferOffer {
 export interface FleetRow extends VehiclePayload {
   readiness: VehicleReadiness;
   readiness_display: string;
+  /** A permanently-running demonstration unit — never takeable by a driver. */
+  is_demo: boolean;
+  /** `no_shift`, or one of draft / pending / active. Draft counts as crewed. */
   shift_status: string;
   shift_status_display: string;
   driver_name: string | null;

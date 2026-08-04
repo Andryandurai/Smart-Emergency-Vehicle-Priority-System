@@ -2,10 +2,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import type { DriverAlert, RoadEvent, Trip, VehiclePayload } from "@/api/types";
+import type { DriverAlert, Trip, VehiclePayload } from "@/api/types";
 import {
   AlertCircle,
-  DisruptionSpotlight,
   FollowVehicle,
   MapCanvas,
   MapLegend,
@@ -62,8 +61,6 @@ export function OperationsPage() {
   const authenticated = useAuthStore((state) => state.status === "authenticated");
   const [basemapId, setBasemapId] = useState<string>("");
 
-  // The disruption the operator has picked out of the list, drawn emphasised.
-  const [highlightedEvent, setHighlightedEvent] = useState<RoadEvent | null>(null);
   // Which trip card was clicked - see the focusedTrip note below.
   const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
 
@@ -289,11 +286,6 @@ export function OperationsPage() {
 
   const focusedRoute = focusedTrip?.active_route?.geometry ?? [];
 
-  // Clicking a disruption in the list flies to it and lights up its marker.
-  // Re-clicking the same one clears, so the list doubles as a toggle.
-  const selectDisruption = (event: RoadEvent) =>
-    setHighlightedEvent((current) => (current?.id === event.id ? null : event));
-
   return (
     <div className="split wide">
       <aside className="sidebar">
@@ -367,40 +359,6 @@ export function OperationsPage() {
           )}
         </Card>
 
-        <Card title="Network disruptions">
-          {store.events.length === 0 ? (
-            <Empty>Network clear.</Empty>
-          ) : (
-            <>
-              <p className="hint">Tap one to find it on the map.</p>
-              {store.events.slice(0, 12).map((event) => (
-                <div
-                  key={event.id}
-                  className={`trip clickable ${event.blocks_road ? "l1" : "l3"}${
-                    highlightedEvent?.id === event.id ? " selected" : ""
-                  }`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => selectDisruption(event)}
-                  onKeyDown={(keyEvent) => {
-                    if (keyEvent.key === "Enter") selectDisruption(event);
-                  }}
-                >
-                  <div className="head">
-                    <span className="ref">{event.event_type_display || event.event_type}</span>
-                    <Badge tone={event.blocks_road ? "bad" : "warn"}>
-                      {event.blocks_road ? "road closed" : `${Math.round(event.severity * 100)}%`}
-                    </Badge>
-                  </div>
-                  <div className="meta">
-                    {event.description || "reported"} · source: {event.source}
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </Card>
-
         <Card title="Live event log">
           <div className="log">
             {store.log.map((entry) => (
@@ -440,19 +398,9 @@ export function OperationsPage() {
               layer={layer.name}
               collection={gis.data[layer.name] ?? null}
               heatmap={layer.is_heatmap}
-              highlightId={layer.name === "road_closures" ? highlightedEvent?.id ?? null : null}
             />
           ) : null;
         })}
-
-        {/* The disruption picked from the sidebar. Drawn even when the
-            closures layer is off - the operator asked for this one. */}
-        {highlightedEvent && (
-          <DisruptionSpotlight
-            event={highlightedEvent}
-            onClear={() => setHighlightedEvent(null)}
-          />
-        )}
 
         {/* The focused vehicle's own route, in vibrant blue. */}
         {focusedCallsign && (

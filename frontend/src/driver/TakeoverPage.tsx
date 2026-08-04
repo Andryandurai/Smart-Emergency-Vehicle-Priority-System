@@ -15,11 +15,11 @@
  * never before: a colleague summoned to an ambulance that turns out to have
  * failed brakes is the one person the driver most needs still available.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
 import { ApiError } from "@/api/client";
-import { shifts as shiftApi } from "@/api/endpoints";
+import { driverOps, shifts as shiftApi } from "@/api/endpoints";
 import type {
   ChecklistDue,
   CrewPerson,
@@ -27,10 +27,12 @@ import type {
   EquipmentAnswer,
   EquipmentCheckPayload,
   EquipmentItemSpec,
+  FleetBoard,
+  FleetRow,
   ReadinessOutcome,
-  SelectableVehicle,
 } from "@/api/types";
 import type { DriverOutletContext } from "@/driver/DriverShell";
+import { usePolling } from "@/hooks/usePolling";
 import { useAuthStore } from "@/stores/authStore";
 
 type Check = (EquipmentCheckPayload & Partial<ReadinessOutcome>) | null;
@@ -143,6 +145,51 @@ export function TakeoverPage() {
 // ---------------------------------------------------------------------------
 // Step 1 — which ambulance
 // ---------------------------------------------------------------------------
+/**
+ * Is this ambulance free for a driver to take over?
+ *
+ * The client-side twin of ``EmergencyVehicle.objects.selectable_for_takeover``
+ * and deliberately the same four tests in the same order, because the board
+ * and the server must not disagree about what "available" means: a card the
+ * picker offers and the server then refuses with a 409 is worse than no card.
+ *
+ * Excluded, in the words the operations console uses for them:
+ *
+ * - **Assigned / On Duty** — ``shift_status`` is anything but ``no_shift``,
+ *   so a vehicle claimed for inspection counts as taken, not just a crewed one.
+ * - **On Mission** — it is running a response; ``status`` alone would miss the
+ *   moment between stages, so the trip reference is checked too.
+ * - **Under Maintenance** — grounded by a failed inspection or in the workshop.
+ *
+ * Demonstration units are excluded outright: they are kept on a rolling
+ * synthetic response, and a driver is not helped by an ambulance that drives
+ * itself away.
+ */
+function isAvailableForTakeover(row: FleetRow): boolean {
+  return (
+    row.vehicle_type === "ambulance" &&
+    !row.is_demo &&
+    row.status === "available" &&
+    row.shift_status === "no_shift" &&
+    row.readiness !== "not_ready" &&
+    row.readiness !== "maintenance" &&
+    row.current_trip_reference === null
+  );
+}
+
+/**
+ * The ambulance board, in the cab.
+ *
+ * Built from ``/fleet/board/`` — the same board the operations console's
+ * Ambulances tab renders — rather than from a driver-only list, so the two
+ * screens read one source and cannot disagree about which vehicles exist or
+ * what state they are in.
+ *
+ * It is polled. Availability is something other people change: a colleague
+ * claims a vehicle, a crew signs off and hands one back, a workshop grounds
+ * one. A board fetched once on mount is wrong within a minute of a shift
+ * changeover, which is exactly when a driver is looking at it.
+ */
 function VehiclePicker({
   onClaimed,
   outerError,
@@ -150,19 +197,37 @@ function VehiclePicker({
   onClaimed: () => Promise<void>;
   outerError: string | null;
 }) {
-  const [vehicles, setVehicles] = useState<SelectableVehicle[]>([]);
+  const [board, setBoard] = useState<FleetBoard | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    shiftApi
-      .selectableVehicles()
-      .then((r) => setVehicles(r.vehicles))
-      .catch(() => setVehicles([]));
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setBoard(await driverOps.board(signal));
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setBoard(null);
+    }
   }, []);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  usePolling((signal) => load(signal), 4000);
+
+  const available = useMemo(
+    () => (board?.vehicles ?? []).filter(isAvailableForTakeover),
+    [board],
+  );
+
+  // An ambulance chosen a moment ago can be claimed by somebody else before
+  // this driver presses the button. Dropping the selection is what stops the
+  // action bar offering "Take over AMB-104" for a vehicle no longer on screen.
+  useEffect(() => {
+    if (chosen && !available.some((row) => row.callsign === chosen)) setChosen(null);
+  }, [available, chosen]);
 
   const claim = async () => {
     if (!chosen) return;
@@ -174,7 +239,7 @@ function VehiclePicker({
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not take that ambulance.");
       // Somebody else may have claimed it while this screen was open.
-      load();
+      void load();
     } finally {
       setBusy(false);
     }
@@ -183,22 +248,30 @@ function VehiclePicker({
   return (
     <div className="dp-page">
       <Stepper step={1} />
-      <h2 className="dp-h2">Choose your ambulance</h2>
+      <h2 className="dp-h2">
+        Choose your ambulance
+        <span className="dp-count">{available.length} available</span>
+      </h2>
       <p className="dp-lead">
-        Only vehicles that are free, uncrewed and not grounded appear here. You will
-        inspect the one you take before anyone is called to it.
+        Every ambulance in the fleet that is free right now. Vehicles that are assigned,
+        on duty, on a mission or under maintenance are not shown. The board updates on
+        its own as crews sign on and off — you will inspect the one you take before
+        anyone is called to it.
       </p>
 
       <DpError error={outerError ?? error} />
 
-      {vehicles.length === 0 ? (
+      {board === null ? (
+        <div className="dp-empty">Loading the ambulance board…</div>
+      ) : available.length === 0 ? (
         <div className="dp-empty">
-          No ambulance is free to take over. Every vehicle is either crewed, on a call,
-          or grounded for maintenance.
+          No ambulance is free to take over. All {board.count} vehicles on the board are
+          either crewed, on a call, or grounded for maintenance. This list refreshes on
+          its own — one will appear here the moment a crew signs off.
         </div>
       ) : (
         <div className="dp-veh-grid">
-          {vehicles.map((vehicle) => (
+          {available.map((vehicle) => (
             <button
               key={vehicle.callsign}
               type="button"
@@ -211,10 +284,13 @@ function VehiclePicker({
                 {vehicle.ownership_display ?? "—"}
                 {vehicle.is_als ? " · ALS" : " · BLS"}
               </div>
-              <div className="dp-veh-meta dim">{vehicle.home_station ?? "No home station"}</div>
-              <span className={`dp-chip ${vehicle.readiness === "ready" ? "ok" : "warn"}`}>
-                {vehicle.readiness_display ?? "Not yet inspected"}
-              </span>
+              <div className="dp-veh-meta dim">{vehicle.operator || "No operator recorded"}</div>
+              <div className="dp-veh-chips">
+                <span className="dp-chip ok">{vehicle.status_display ?? "Available"}</span>
+                <span className={`dp-chip ${vehicle.readiness === "ready" ? "ok" : "warn"}`}>
+                  {vehicle.readiness_display ?? "Not yet inspected"}
+                </span>
+              </div>
             </button>
           ))}
         </div>
